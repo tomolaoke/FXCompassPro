@@ -17,9 +17,9 @@ const subscribers = new Set<(event: FeedEvent) => void>();
 
 export function publishEvent(input: {
   type: string;
-  symbol?: string | null;
-  source?: string;
-  payload?: Record<string, unknown>;
+  symbol?: string | null | undefined;
+  source?: string | undefined;
+  payload?: Record<string, unknown> | undefined;
 }): FeedEvent {
   const event: FeedEvent = {
     id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
