@@ -10,12 +10,24 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ChartRouteImport } from './routes/chart'
+import { Route as PlanRouteImport } from './routes/plan'
 import { Route as ApiPublicEventsRouteImport } from './routes/api/public/events'
 import { Route as ApiPublicFeedRouteImport } from './routes/api/public/feed'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChartRoute = ChartRouteImport.update({
+  id: '/chart',
+  path: '/chart',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PlanRoute = PlanRouteImport.update({
+  id: '/plan',
+  path: '/plan',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicEventsRoute = ApiPublicEventsRouteImport.update({
@@ -31,30 +43,45 @@ const ApiPublicFeedRoute = ApiPublicFeedRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/chart': typeof ChartRoute
+  '/plan': typeof PlanRoute
   '/api/public/events': typeof ApiPublicEventsRoute
   '/api/public/feed': typeof ApiPublicFeedRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/chart': typeof ChartRoute
+  '/plan': typeof PlanRoute
   '/api/public/events': typeof ApiPublicEventsRoute
   '/api/public/feed': typeof ApiPublicFeedRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/chart': typeof ChartRoute
+  '/plan': typeof PlanRoute
   '/api/public/events': typeof ApiPublicEventsRoute
   '/api/public/feed': typeof ApiPublicFeedRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/public/events' | '/api/public/feed'
+  fullPaths:
+    '/' | '/chart' | '/plan' | '/api/public/events' | '/api/public/feed'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/public/events' | '/api/public/feed'
-  id: '__root__' | '/' | '/api/public/events' | '/api/public/feed'
+  to: '/' | '/chart' | '/plan' | '/api/public/events' | '/api/public/feed'
+  id:
+    | '__root__'
+    | '/'
+    | '/chart'
+    | '/plan'
+    | '/api/public/events'
+    | '/api/public/feed'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ChartRoute: typeof ChartRoute
+  PlanRoute: typeof PlanRoute
   ApiPublicEventsRoute: typeof ApiPublicEventsRoute
   ApiPublicFeedRoute: typeof ApiPublicFeedRoute
 }
@@ -66,6 +93,20 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/chart': {
+      id: '/chart'
+      path: '/chart'
+      fullPath: '/chart'
+      preLoaderRoute: typeof ChartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/plan': {
+      id: '/plan'
+      path: '/plan'
+      fullPath: '/plan'
+      preLoaderRoute: typeof PlanRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/events': {
@@ -87,6 +128,8 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ChartRoute: ChartRoute,
+  PlanRoute: PlanRoute,
   ApiPublicEventsRoute: ApiPublicEventsRoute,
   ApiPublicFeedRoute: ApiPublicFeedRoute,
 }
