@@ -1,7 +1,35 @@
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { getQuotes, getSeries } from "./market.functions";
-import type { Timeframe } from "./types";
+import { getQuotes, getSeries, getSignalRun } from "./market.functions";
+import type { AppSettings, Timeframe } from "./types";
+
+export function useSignalRun(settings: AppSettings, symbols?: string[]) {
+  const run = useServerFn(getSignalRun);
+  const list = symbols ?? settings.watchlist;
+  return useQuery({
+    queryKey: [
+      "signal-run",
+      list.join(","),
+      settings.confirmationTimeframes.join(","),
+      settings.executionTimeframe,
+      settings.risk.accountCapital,
+      settings.risk.riskPercent,
+      settings.risk.maxSpreadPips,
+      settings.risk.maxDataAgeMinutes,
+    ],
+    queryFn: () =>
+      run({
+        data: {
+          symbols: list,
+          confirmationTimeframes: settings.confirmationTimeframes,
+          executionTimeframe: settings.executionTimeframe,
+          risk: settings.risk,
+        },
+      }),
+    refetchInterval: 120_000,
+    enabled: list.length > 0,
+  });
+}
 
 export function useQuotes(symbols: string[]) {
   const fetchQuotes = useServerFn(getQuotes);
