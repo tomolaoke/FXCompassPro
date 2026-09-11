@@ -280,11 +280,17 @@ export async function loadQuotes(symbols: string[]): Promise<QuotesResult> {
 
   const key = apiKey();
   if (!Object.keys(found).length && key) {
-    try {
-      Object.assign(found, await twelveDataQuotes(wanted, key));
-    } catch (error) {
-      notes.push(`TwelveData spot prices unavailable (${(error as Error).message}).`);
-    }
+    const results = await Promise.all(
+      wanted.map(async (symbol) => {
+        try {
+          return await twelveDataQuote(symbol, key);
+        } catch (error) {
+          notes.push(`${symbol}: real price unavailable (${(error as Error).message}).`);
+          return null;
+        }
+      }),
+    );
+    for (const quote of results) if (quote) found[quote.symbol] = quote;
   }
   if (!key) notes.push("No TwelveData key configured — using the free daily reference source where possible.");
 
