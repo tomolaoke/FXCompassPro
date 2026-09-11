@@ -1,6 +1,6 @@
 import { specFor } from "./instruments";
 import { demoCandles, demoQuote } from "./demo";
-import type { Candle, Quote, Timeframe } from "./types";
+import { TF_MINUTES, type Candle, type Quote, type Timeframe } from "./types";
 
 /**
  * Real market-data adapters.
@@ -85,6 +85,62 @@ function parseBars(raw: unknown, digits: number): Candle[] {
   return candles.sort((a, b) => a.t - b.t);
 }
 
+/** UTC bucket start for a timestamp on a given timeframe. */
+function bucketStart(t: number, tf: Timeframe): number {
+  const d = new Date(t);
+  if (tf === "MN") return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+  if (tf === "W1") {
+    const day = (d.getUTCDay() + 6) % 7; // Monday-based
+    const base = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    return base - day * 86_400_000;
+  }
+  const ms = TF_MINUTES[tf] * 60_000;
+  return Math.floor(t / ms) * ms;
+}
+
+/** Rolls smaller candles up into a larger timeframe. */
+function aggregate(base: Candle[], tf: Timeframe): Candle[] {
+  const out: Candle[] = [];
+  let current: Candle | null = null;
+  let currentKey = Number.NaN;
+  for (const c of base) {
+    const key = bucketStart(c.t, tf);
+    if (!current || key !== currentKey) {
+      if (current) out.push(current);
+      current = { t: key, o: c.o, h: c.h, l: c.l, c: c.c };
+      currentKey = key;
+      continue;
+    }
+    current.h = Math.max(current.h, c.h);
+    current.l = Math.min(current.l, c.l);
+    current.c = c.c;
+  }
+  if (current) out.push(current);
+  return out;
+}
+
+/**
+ * One provider request per symbol, rolled up into every requested timeframe.
+ * Free TwelveData plans allow only a handful of requests per minute, so we
+ * never fire one call per timeframe.
+ */
+async function loadBase(symbol: string, interval: Timeframe, key: string): Promise<Candle[]> {
+  const cacheKey = `td:base:${symbol}:${interval}`;
+  const hit = cached<Candle[]>(cacheKey, 60_000);
+  if (hit && hit.length) return hit;
+  const spec = specFor(symbol);
+  const url =
+    `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol(symbol))}` +
+    `&interval=${TD_INTERVAL[interval]}&outputsize=5000&format=JSON&apikey=${encodeURIComponent(key)}`;
+  const raw = await getJson(url);
+  const status = (raw as { status?: string; message?: string }).status;
+  if (status === "error") throw new Error((raw as { message?: string }).message ?? "provider error");
+  const candles = parseBars(raw, spec.digits);
+  if (candles.length < 30) throw new Error("not enough history returned");
+  store(cacheKey, candles);
+  return candles;
+}
+
 /** Candles per timeframe. Falls back to labelled sample data per timeframe. */
 export async function loadSeries(
   symbol: string,
@@ -96,29 +152,39 @@ export async function loadSeries(
   const notes: string[] = [];
   let realCount = 0;
 
-  for (const tf of timeframes) {
-    const cacheKey = `td:${symbol}:${tf}`;
-    const hit = cached<Candle[]>(cacheKey, 60_000);
-    if (hit && hit.length) {
-      series[tf] = hit;
-      realCount += 1;
-      continue;
-    }
-    if (!key) break;
+  if (key) {
+    const smallest = timeframes.reduce<Timeframe>(
+      (acc, tf) => (TF_MINUTES[tf] < TF_MINUTES[acc] ? tf : acc),
+      timeframes[0]!,
+    );
+    const needsDaily = timeframes.some((tf) => TF_MINUTES[tf] > TF_MINUTES.D1);
+    let intraday: Candle[] = [];
+    let daily: Candle[] = [];
+
     try {
-      const url =
-        `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol(symbol))}` +
-        `&interval=${TD_INTERVAL[tf]}&outputsize=220&format=JSON&apikey=${encodeURIComponent(key)}`;
-      const raw = await getJson(url);
-      const status = (raw as { status?: string; message?: string }).status;
-      if (status === "error") throw new Error((raw as { message?: string }).message ?? "provider error");
-      const candles = parseBars(raw, spec.digits);
-      if (candles.length < 30) throw new Error("not enough history returned");
-      series[tf] = candles;
-      store(cacheKey, candles);
-      realCount += 1;
+      intraday = await loadBase(symbol, smallest, key);
     } catch (error) {
-      notes.push(`${tf}: real candles unavailable (${(error as Error).message}).`);
+      notes.push(`Intraday candles unavailable (${(error as Error).message}).`);
+    }
+    if (needsDaily) {
+      try {
+        daily = await loadBase(symbol, "D1", key);
+      } catch (error) {
+        notes.push(`Daily candles unavailable (${(error as Error).message}).`);
+      }
+    }
+
+    for (const tf of timeframes) {
+      const isHigh = TF_MINUTES[tf] > TF_MINUTES.D1;
+      const source = isHigh ? daily : intraday;
+      if (!source.length) continue;
+      const rolled = tf === smallest && !isHigh ? source : aggregate(source, tf);
+      if (rolled.length < 30) {
+        notes.push(`${tf}: not enough real history to read reliably.`);
+        continue;
+      }
+      series[tf] = rolled.slice(-320);
+      realCount += 1;
     }
   }
 
@@ -139,36 +205,29 @@ export async function loadSeries(
   };
 }
 
-async function twelveDataQuotes(symbols: string[], key: string): Promise<Record<string, Quote>> {
-  const list = symbols.map(tdSymbol).join(",");
-  const url = `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(list)}&format=JSON&apikey=${encodeURIComponent(key)}`;
-  const raw = (await getJson(url)) as Record<string, unknown>;
-  const single = typeof raw["symbol"] === "string";
-  const out: Record<string, Quote> = {};
-  for (const symbol of symbols) {
-    const node = (single ? raw : (raw[tdSymbol(symbol)] as Record<string, unknown> | undefined)) ?? undefined;
-    if (!node) continue;
-    if ((node as { status?: string }).status === "error") continue;
-    const close = Number((node as { close?: string }).close);
-    if (!Number.isFinite(close)) continue;
-    const spec = specFor(symbol);
-    const tsRaw = Number((node as { timestamp?: number }).timestamp);
-    const timestamp = Number.isFinite(tsRaw) ? tsRaw * 1000 : Date.now();
-    const spread = (spec.typicalSpreadPips ?? 1) * spec.pipSize;
-    out[spec.symbol] = {
-      symbol: spec.symbol,
-      bid: Number((close - spread / 2).toFixed(spec.digits)),
-      ask: Number((close + spread / 2).toFixed(spec.digits)),
-      mid: Number(close.toFixed(spec.digits)),
-      spread: Number(spread.toFixed(spec.digits + 1)),
-      timestamp,
-      provider: "TwelveData",
-      kind: "delayed",
-      quality: 82,
-      note: "Real market price from TwelveData. Bid/ask are estimated from a typical spread, not your broker's book.",
-    };
-  }
-  return out;
+/**
+ * Latest price taken from the last real candle. Reuses the cached candle
+ * request, so a whole watchlist costs one provider call per symbol.
+ */
+async function twelveDataQuote(symbol: string, key: string): Promise<Quote | null> {
+  const candles = await loadBase(symbol, "M15", key);
+  const last = candles[candles.length - 1];
+  if (!last) return null;
+  const spec = specFor(symbol);
+  const close = last.c;
+  const spread = (spec.typicalSpreadPips ?? 1) * spec.pipSize;
+  return {
+    symbol: spec.symbol,
+    bid: Number((close - spread / 2).toFixed(spec.digits)),
+    ask: Number((close + spread / 2).toFixed(spec.digits)),
+    mid: Number(close.toFixed(spec.digits)),
+    spread: Number(spread.toFixed(spec.digits + 1)),
+    timestamp: last.t + TF_MINUTES.M15 * 60_000,
+    provider: "TwelveData",
+    kind: "delayed",
+    quality: 82,
+    note: "Real market price from TwelveData (last completed 15-minute candle). Bid/ask are estimated from a typical spread, not your broker's book.",
+  };
 }
 
 async function frankfurterQuote(symbol: string): Promise<Quote | null> {
@@ -216,11 +275,17 @@ export async function loadQuotes(symbols: string[]): Promise<QuotesResult> {
 
   const key = apiKey();
   if (!Object.keys(found).length && key) {
-    try {
-      Object.assign(found, await twelveDataQuotes(wanted, key));
-    } catch (error) {
-      notes.push(`TwelveData spot prices unavailable (${(error as Error).message}).`);
-    }
+    const results = await Promise.all(
+      wanted.map(async (symbol) => {
+        try {
+          return await twelveDataQuote(symbol, key);
+        } catch (error) {
+          notes.push(`${symbol}: real price unavailable (${(error as Error).message}).`);
+          return null;
+        }
+      }),
+    );
+    for (const quote of results) if (quote) found[quote.symbol] = quote;
   }
   if (!key) notes.push("No TwelveData key configured — using the free daily reference source where possible.");
 
