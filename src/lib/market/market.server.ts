@@ -1,6 +1,6 @@
 import { specFor } from "./instruments";
 import { demoCandles, demoQuote } from "./demo";
-import type { Candle, Quote, Timeframe } from "./types";
+import { TF_MINUTES, type Candle, type Quote, type Timeframe } from "./types";
 
 /**
  * Real market-data adapters.
