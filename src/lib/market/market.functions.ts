@@ -76,26 +76,29 @@ export const getSignalRun = createServerFn({ method: "POST" })
       new Set([...data.confirmationTimeframes, data.executionTimeframe]),
     );
 
-    const rows = [];
-    for (const quote of quoteResult.quotes) {
-      const seriesResult = await loadSeries(quote.symbol, timeframes);
-      const signal = evaluateSignal({
-        symbol: quote.symbol,
-        quote,
-        series: seriesResult.series,
-        confirmationTimeframes: data.confirmationTimeframes,
-        executionTimeframe: data.executionTimeframe,
-        risk: data.risk,
-      });
-      rows.push({
-        symbol: quote.symbol,
-        quote,
-        signal,
-        provider: seriesResult.provider,
-        real: seriesResult.real && quote.kind !== "demo",
-        notes: seriesResult.notes,
-      });
-    }
+    // Symbols run in parallel: one provider request each, so a full watchlist
+    // scan finishes in seconds instead of one round trip per pair.
+    const rows = await Promise.all(
+      quoteResult.quotes.map(async (quote) => {
+        const seriesResult = await loadSeries(quote.symbol, timeframes);
+        const signal = evaluateSignal({
+          symbol: quote.symbol,
+          quote,
+          series: seriesResult.series,
+          confirmationTimeframes: data.confirmationTimeframes,
+          executionTimeframe: data.executionTimeframe,
+          risk: data.risk,
+        });
+        return {
+          symbol: quote.symbol,
+          quote,
+          signal,
+          provider: seriesResult.provider,
+          real: seriesResult.real && quote.kind !== "demo",
+          notes: seriesResult.notes,
+        };
+      }),
+    );
 
     return {
       generatedAt: Date.now(),
