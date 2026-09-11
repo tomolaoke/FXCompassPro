@@ -157,7 +157,7 @@ export async function loadSeries(
       (acc, tf) => (TF_MINUTES[tf] < TF_MINUTES[acc] ? tf : acc),
       timeframes[0]!,
     );
-    const needsDaily = timeframes.some((tf) => TF_MINUTES[tf] >= TF_MINUTES.D1);
+    const needsDaily = timeframes.some((tf) => TF_MINUTES[tf] > TF_MINUTES.D1);
     let intraday: Candle[] = [];
     let daily: Candle[] = [];
 
@@ -175,15 +175,10 @@ export async function loadSeries(
     }
 
     for (const tf of timeframes) {
-      const isHigh = TF_MINUTES[tf] >= TF_MINUTES.D1;
+      const isHigh = TF_MINUTES[tf] > TF_MINUTES.D1;
       const source = isHigh ? daily : intraday;
       if (!source.length) continue;
-      const rolled =
-        tf === smallest && !isHigh
-          ? source
-          : tf === "D1" && isHigh
-            ? source
-            : aggregate(source, tf);
+      const rolled = tf === smallest && !isHigh ? source : aggregate(source, tf);
       if (rolled.length < 30) {
         notes.push(`${tf}: not enough real history to read reliably.`);
         continue;
