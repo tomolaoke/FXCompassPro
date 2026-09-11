@@ -210,36 +210,29 @@ export async function loadSeries(
   };
 }
 
-async function twelveDataQuotes(symbols: string[], key: string): Promise<Record<string, Quote>> {
-  const list = symbols.map(tdSymbol).join(",");
-  const url = `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(list)}&format=JSON&apikey=${encodeURIComponent(key)}`;
-  const raw = (await getJson(url)) as Record<string, unknown>;
-  const single = typeof raw["symbol"] === "string";
-  const out: Record<string, Quote> = {};
-  for (const symbol of symbols) {
-    const node = (single ? raw : (raw[tdSymbol(symbol)] as Record<string, unknown> | undefined)) ?? undefined;
-    if (!node) continue;
-    if ((node as { status?: string }).status === "error") continue;
-    const close = Number((node as { close?: string }).close);
-    if (!Number.isFinite(close)) continue;
-    const spec = specFor(symbol);
-    const tsRaw = Number((node as { timestamp?: number }).timestamp);
-    const timestamp = Number.isFinite(tsRaw) ? tsRaw * 1000 : Date.now();
-    const spread = (spec.typicalSpreadPips ?? 1) * spec.pipSize;
-    out[spec.symbol] = {
-      symbol: spec.symbol,
-      bid: Number((close - spread / 2).toFixed(spec.digits)),
-      ask: Number((close + spread / 2).toFixed(spec.digits)),
-      mid: Number(close.toFixed(spec.digits)),
-      spread: Number(spread.toFixed(spec.digits + 1)),
-      timestamp,
-      provider: "TwelveData",
-      kind: "delayed",
-      quality: 82,
-      note: "Real market price from TwelveData. Bid/ask are estimated from a typical spread, not your broker's book.",
-    };
-  }
-  return out;
+/**
+ * Latest price taken from the last real candle. Reuses the cached candle
+ * request, so a whole watchlist costs one provider call per symbol.
+ */
+async function twelveDataQuote(symbol: string, key: string): Promise<Quote | null> {
+  const candles = await loadBase(symbol, "M15", key);
+  const last = candles[candles.length - 1];
+  if (!last) return null;
+  const spec = specFor(symbol);
+  const close = last.c;
+  const spread = (spec.typicalSpreadPips ?? 1) * spec.pipSize;
+  return {
+    symbol: spec.symbol,
+    bid: Number((close - spread / 2).toFixed(spec.digits)),
+    ask: Number((close + spread / 2).toFixed(spec.digits)),
+    mid: Number(close.toFixed(spec.digits)),
+    spread: Number(spread.toFixed(spec.digits + 1)),
+    timestamp: last.t + TF_MINUTES.M15 * 60_000,
+    provider: "TwelveData",
+    kind: "delayed",
+    quality: 82,
+    note: "Real market price from TwelveData (last completed 15-minute candle). Bid/ask are estimated from a typical spread, not your broker's book.",
+  };
 }
 
 async function frankfurterQuote(symbol: string): Promise<Quote | null> {
