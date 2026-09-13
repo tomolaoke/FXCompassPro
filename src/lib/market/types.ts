@@ -1,6 +1,31 @@
-export type Timeframe = "MN" | "W1" | "D1" | "H4" | "H1" | "M30" | "M15" | "M5";
+export type Timeframe = "MN" | "W1" | "D1" | "H4" | "H1" | "M30" | "M15" | "M5" | "M1";
 
-export const ALL_TIMEFRAMES: Timeframe[] = ["MN", "W1", "D1", "H4", "H1", "M30", "M15", "M5"];
+export const ALL_TIMEFRAMES: Timeframe[] = [
+  "MN",
+  "W1",
+  "D1",
+  "H4",
+  "H1",
+  "M30",
+  "M15",
+  "M5",
+  "M1",
+];
+
+/** MN / W1 give broad context only and can never block a signal. */
+export const CONTEXT_TIMEFRAMES: Timeframe[] = ["MN", "W1"];
+/** The main directional / confirmation stack. */
+export const CONFIRMATION_TIMEFRAMES: Timeframe[] = ["D1", "H4", "H1", "M30", "M15"];
+/** Timing only: M5 confirms, M1 triggers. */
+export const ENTRY_TIMEFRAMES: Timeframe[] = ["M5", "M1"];
+
+export type TimeframeRole = "CONTEXT" | "CONFIRMATION" | "ENTRY";
+
+export function roleOf(tf: Timeframe): TimeframeRole {
+  if (CONTEXT_TIMEFRAMES.includes(tf)) return "CONTEXT";
+  if (ENTRY_TIMEFRAMES.includes(tf)) return "ENTRY";
+  return "CONFIRMATION";
+}
 
 export const TF_MINUTES: Record<Timeframe, number> = {
   MN: 43200,
@@ -11,6 +36,7 @@ export const TF_MINUTES: Record<Timeframe, number> = {
   M30: 30,
   M15: 15,
   M5: 5,
+  M1: 1,
 };
 
 export interface Candle {
@@ -62,15 +88,36 @@ export type SignalState =
   | "TRIGGERED"
   | "MISSED"
   | "INVALIDATED"
+  | "INVALID"
+  | "INSUFFICIENT_DATA"
   | "EXPIRED";
+
+export type StochZone = "OVERSOLD" | "OVERBOUGHT" | "NEUTRAL";
+export type StochBehaviour =
+  | "EXTREME"
+  | "CURVING"
+  | "CROSSED"
+  | "CONFIRMED"
+  | "NO_CONFIRMATION";
+export type BiasDirection = "BULLISH" | "BEARISH" | "NEUTRAL";
+export type DataStatus = "VALID" | "STALE" | "UNAVAILABLE";
+/** How MN / W1 context was treated for this reading. */
+export type ContextStatus = "USED" | "NOT_AVAILABLE" | "STALE" | "CONFLICTING";
 
 export interface TimeframeEvidence {
   timeframe: Timeframe;
-  k: number | null;
-  d: number | null;
-  stochState: StochState;
+  role: TimeframeRole;
+  stochasticK: number | null;
+  stochasticD: number | null;
+  zone: StochZone;
+  state: StochBehaviour;
+  crossLevel: 20 | 30 | 70 | 80 | null;
+  direction: BiasDirection;
+  used: boolean;
+  dataStatus: DataStatus;
+  /** agrees with the final signal direction */
   aligned: boolean;
-  note: string;
+  explanation: string;
 }
 
 export type StochState =
@@ -81,6 +128,24 @@ export type StochState =
   | "OVERBOUGHT"
   | "UNKNOWN";
 
+export interface HigherContext {
+  monthly: ContextStatus;
+  weekly: ContextStatus;
+  monthlyDirection: BiasDirection;
+  weeklyDirection: BiasDirection;
+  used: boolean;
+  conflict: boolean;
+  /** why the signal was still allowed while MN / W1 disagree */
+  allowedDespiteConflict: string | null;
+}
+
+export interface Explanations {
+  en: string;
+  caveman: string;
+  pidgin: string;
+  source: "groq" | "deterministic";
+}
+
 export interface Signal {
   symbol: string;
   direction: Direction;
@@ -90,6 +155,8 @@ export interface Signal {
   confidenceLabel: ConfidenceLabel;
   setupType: string;
   entryZone: [number, number] | null;
+  /** the exact price every R:R figure below is calculated from */
+  entryPrice: number | null;
   invalidationLevel: number | null;
   stopLoss: number | null;
   takeProfit1: number | null;
@@ -99,11 +166,15 @@ export interface Signal {
   reasons: string[];
   warnings: string[];
   whyItMayFail: string[];
+  /** non-empty means the numbers failed validation and must not be traded */
+  calculationErrors: string[];
   triggerCondition: string;
   invalidationCondition: string;
   newsRisk: string | null;
   session: Session;
   timeframeEvidence: TimeframeEvidence[];
+  higherContext: HigherContext;
+  explanations?: Explanations;
   dataTimestamp: number;
   dataSource: string;
   dataKind: QuoteKind;
