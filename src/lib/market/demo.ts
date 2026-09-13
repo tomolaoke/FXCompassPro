@@ -93,7 +93,7 @@ export function demoQuote(symbol: string, candles: Candle[]): Quote {
 }
 
 export function demoSeries(symbol: string): Partial<Record<Timeframe, Candle[]>> {
-  const tfs: Timeframe[] = ["MN", "W1", "D1", "H4", "H1", "M30", "M15", "M5"];
+  const tfs: Timeframe[] = ["MN", "W1", "D1", "H4", "H1", "M30", "M15", "M5", "M1"];
   const out: Partial<Record<Timeframe, Candle[]>> = {};
   for (const tf of tfs) out[tf] = demoCandles(symbol, tf);
   return out;

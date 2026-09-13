@@ -20,7 +20,18 @@ const TD_INTERVAL: Record<Timeframe, string> = {
   M30: "30min",
   M15: "15min",
   M5: "5min",
+  M1: "1min",
 };
+
+/**
+ * Which provider request each timeframe is rolled up from. Three base series
+ * per symbol cover all nine timeframes, which keeps us inside free-plan limits.
+ */
+function baseFor(tf: Timeframe): Timeframe {
+  if (tf === "M1") return "M1";
+  if (TF_MINUTES[tf] <= TF_MINUTES.H4) return "M5";
+  return "D1";
+}
 
 export interface SeriesResult {
   symbol: string;
