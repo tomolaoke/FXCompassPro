@@ -119,8 +119,10 @@ export function useSettings() {
 }
 
 export function useJournal() {
-  const [entries, setEntries] = useStoreValue<JournalEntry[]>(KEYS.journal, () =>
-    readArray<JournalEntry>(KEYS.journal),
+  const [entries, setEntries] = useStoreValue<JournalEntry[]>(
+    KEYS.journal,
+    () => readArray<JournalEntry>(KEYS.journal),
+    [],
   );
   return {
     entries,
@@ -132,8 +134,10 @@ export function useJournal() {
 }
 
 export function useSignalRecords() {
-  const [records, setRecords] = useStoreValue<SignalRecord[]>(KEYS.records, () =>
-    readArray<SignalRecord>(KEYS.records),
+  const [records, setRecords] = useStoreValue<SignalRecord[]>(
+    KEYS.records,
+    () => readArray<SignalRecord>(KEYS.records),
+    [],
   );
   return {
     records,
@@ -146,8 +150,10 @@ export function useSignalRecords() {
 }
 
 export function useManualQuotes() {
-  const [quotes, setQuotes] = useStoreValue<Record<string, Quote>>(KEYS.quotes, () =>
-    read<Record<string, Quote>>(KEYS.quotes, {}),
+  const [quotes, setQuotes] = useStoreValue<Record<string, Quote>>(
+    KEYS.quotes,
+    () => read<Record<string, Quote>>(KEYS.quotes, {}),
+    {},
   );
   return {
     quotes,
