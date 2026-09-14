@@ -135,21 +135,39 @@ function aggregate(base: Candle[], tf: Timeframe): Candle[] {
  * Free TwelveData plans allow only a handful of requests per minute, so we
  * never fire one call per timeframe.
  */
+/** Just enough bars to roll each base up into its largest timeframe. */
+const BASE_SIZE: Partial<Record<Timeframe, number>> = { M1: 400, M5: 1500, D1: 1200 };
+/** How long a base series stays fresh; longer timeframes move slowly. */
+const BASE_TTL: Partial<Record<Timeframe, number>> = {
+  M1: 45_000,
+  M5: 120_000,
+  D1: 3_600_000,
+};
+
 async function loadBase(symbol: string, interval: Timeframe, key: string): Promise<Candle[]> {
   const cacheKey = `td:base:${symbol}:${interval}`;
-  const hit = cached<Candle[]>(cacheKey, 60_000);
+  const hit = cached<Candle[]>(cacheKey, BASE_TTL[interval] ?? 60_000);
   if (hit && hit.length) return hit;
   const spec = specFor(symbol);
   const url =
     `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol(symbol))}` +
-    `&interval=${TD_INTERVAL[interval]}&outputsize=5000&format=JSON&apikey=${encodeURIComponent(key)}`;
-  const raw = await getJson(url);
-  const status = (raw as { status?: string; message?: string }).status;
-  if (status === "error") throw new Error((raw as { message?: string }).message ?? "provider error");
-  const candles = parseBars(raw, spec.digits);
-  if (candles.length < 30) throw new Error("not enough history returned");
-  store(cacheKey, candles);
-  return candles;
+    `&interval=${TD_INTERVAL[interval]}&outputsize=${BASE_SIZE[interval] ?? 1500}` +
+    `&format=JSON&apikey=${encodeURIComponent(key)}`;
+  try {
+    const raw = await getJson(url);
+    const status = (raw as { status?: string; message?: string }).status;
+    if (status === "error")
+      throw new Error((raw as { message?: string }).message ?? "provider error");
+    const candles = parseBars(raw, spec.digits);
+    if (candles.length < 30) throw new Error("not enough history returned");
+    store(cacheKey, candles);
+    return candles;
+  } catch (error) {
+    // Rate limits and outages must not wipe out prices we already fetched.
+    const stale = cache.get(cacheKey)?.value as Candle[] | undefined;
+    if (stale?.length) return stale;
+    throw error;
+  }
 }
 
 /** Candles per timeframe. Falls back to labelled sample data per timeframe. */
