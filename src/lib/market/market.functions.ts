@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ALL_TIMEFRAMES, type Timeframe } from "./types";
 import { ALL_TIMEFRAMES as ENGINE_TIMEFRAMES } from "./config/timeframes";
 import { DEFAULT_STRATEGY } from "./config/strategy";
+import type { EngineSignal } from "./engine/types";
 
 const symbolSchema = z
   .string()
@@ -173,4 +174,82 @@ export const getEngineSignalRun = createServerFn({ method: "POST" })
       strategyVersion: DEFAULT_STRATEGY.version,
       rows,
     };
+  });
+
+const recordDecisionSchema = z.enum(["accepted", "rejected", "ignored"]);
+
+/**
+ * Persists one signal's full audit trail. Called explicitly from the UI when
+ * the user records a signal — not on every background poll, which would
+ * flood a free-tier database with rows for setups that never left WATCH.
+ */
+export const recordSignal = createServerFn({ method: "POST" })
+  .inputValidator(
+    (input: {
+      signal: unknown;
+      userDecision?: "accepted" | "rejected" | "ignored";
+      userDecisionReason?: string;
+    }) =>
+      z
+        .object({
+          // The full EngineSignal is produced server-side moments earlier and
+          // round-tripped through the client unmodified; validating its exact
+          // shape here would duplicate the engine's own types for no benefit,
+          // so it is trusted as opaque JSON and only the envelope is checked.
+          signal: z.record(z.unknown()),
+          userDecision: recordDecisionSchema.optional(),
+          userDecisionReason: z.string().max(500).optional(),
+        })
+        .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const { recordSignalAudit } = await import("../db/signals.server");
+    const id = await recordSignalAudit({
+      signal: data.signal as unknown as EngineSignal,
+      ...(data.userDecision ? { userDecision: data.userDecision } : {}),
+      ...(data.userDecisionReason ? { userDecisionReason: data.userDecisionReason } : {}),
+    });
+    return { id };
+  });
+
+export const getSignalHistoryFn = createServerFn({ method: "POST" })
+  .inputValidator((input: { symbol?: string; limit?: number }) =>
+    z
+      .object({
+        symbol: symbolSchema.optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const { getSignalHistory } = await import("../db/signals.server");
+    return getSignalHistory({
+      ...(data.symbol ? { symbol: data.symbol } : {}),
+      ...(data.limit !== undefined ? { limit: data.limit } : {}),
+    });
+  });
+
+export const updateSignalOutcomeFn = createServerFn({ method: "POST" })
+  .inputValidator(
+    (input: {
+      id: string;
+      outcome: "WIN" | "LOSS" | "BREAKEVEN" | "PENDING";
+      rMultiple?: number;
+    }) =>
+      z
+        .object({
+          id: z.string().min(1).max(64),
+          outcome: z.enum(["WIN", "LOSS", "BREAKEVEN", "PENDING"]),
+          rMultiple: z.number().optional(),
+        })
+        .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const { updateSignalOutcome } = await import("../db/signals.server");
+    await updateSignalOutcome({
+      id: data.id,
+      outcome: data.outcome,
+      rMultiple: data.rMultiple ?? null,
+    });
+    return { ok: true };
   });

@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { AppShell, Panel } from "@/components/app-shell";
 import { SignalCard } from "@/components/signal-card";
 import { useEngineSignalRun } from "@/lib/market/hooks";
+import { recordSignal } from "@/lib/market/market.functions";
 import { newId, useSettings, useSignalRecords } from "@/lib/market/store";
 import type { Session } from "@/lib/market/types";
 
@@ -34,6 +36,7 @@ function Dashboard() {
   const { settings } = useSettings();
   const { records, add } = useSignalRecords();
   const { data, isLoading, isError, refetch, isFetching } = useEngineSignalRun(settings);
+  const persistSignal = useServerFn(recordSignal);
 
   const rows = data?.rows ?? [];
   const ready = rows.filter((r) => r.signal.readiness === "READY").length;
@@ -92,7 +95,7 @@ function Dashboard() {
             logged={records.some(
               (r) => r.symbol === row.symbol && Date.now() - r.createdAt < 1000 * 60 * 60 * 6,
             )}
-            onLog={() =>
+            onLog={() => {
               add({
                 id: newId(),
                 createdAt: Date.now(),
@@ -109,8 +112,19 @@ function Dashboard() {
                 dataKind: row.quote.kind,
                 session: toRecordSession(row.signal.session),
                 notes: "",
-              })
-            }
+              });
+              // The full audit trail — every timeframe's state, relation and
+              // Stochastic reading, plus the exact strategy version — is kept
+              // server-side so this signal can be reproduced later. The
+              // localStorage record above only holds the summary the UI needs
+              // for the win-rate view.
+              void persistSignal({ data: { signal: row.signal, userDecision: "accepted" } }).catch(
+                () => {
+                  // Best-effort: the local record above already captured the
+                  // decision, so a database hiccup here must not block the UI.
+                },
+              );
+            }}
           />
         ))}
       </div>

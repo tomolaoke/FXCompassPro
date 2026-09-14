@@ -62,7 +62,27 @@ match your charts.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DATABASE_URL` | `file:./data/fxcompass.db` | Local SQLite file. Ignored in production on Cloudflare, where a D1 binding is used instead. |
+| `DATABASE_URL` | `file:./data/fxcompass.db` | SQLite over libSQL. A local file for development; a `libsql://...` URL in production. |
+| `DATABASE_AUTH_TOKEN` | *(empty)* | Required alongside a remote `DATABASE_URL`. Not needed for a local file. |
+
+The app is deployed on Vercel, whose serverless functions do not share a
+filesystem between invocations — a local SQLite file there is wiped on every
+cold start. Production therefore needs a real remote database. The free option
+is [Turso](https://turso.tech), which speaks the same libSQL protocol a local
+file does, so no code or schema changes are needed between the two:
+
+```bash
+turso auth signup                     # or: turso auth login
+turso db create fxcompass
+turso db show fxcompass --url         # → DATABASE_URL
+turso db tokens create fxcompass      # → DATABASE_AUTH_TOKEN
+```
+
+Add both as environment variables in the Vercel project's settings (Project →
+Settings → Environment Variables), scoped to Production (and Preview, if you
+want preview deployments to share the same data — otherwise give Preview its
+own Turso database). Tables are created automatically on first request; there
+is no separate migration command to run.
 
 ### News
 
