@@ -67,13 +67,19 @@ function write(key: string, value: unknown) {
   window.dispatchEvent(new CustomEvent("cm-store", { detail: key }));
 }
 
-function useStoreValue<T>(key: string, loader: () => T): [T, (next: T) => void] {
-  const [value, setValue] = useState<T>(loader);
-  const [hydrated, setHydrated] = useState(false);
+/**
+ * Server and first client render always use `initial`, so the HTML matches.
+ * Stored values are applied after hydration.
+ */
+function useStoreValue<T>(
+  key: string,
+  loader: () => T,
+  initial: T,
+): [T, (next: T) => void] {
+  const [value, setValue] = useState<T>(initial);
 
   useEffect(() => {
     setValue(loader());
-    setHydrated(true);
     const onChange = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail;
       if (detail === key) setValue(loader());
@@ -91,7 +97,6 @@ function useStoreValue<T>(key: string, loader: () => T): [T, (next: T) => void] 
     [key],
   );
 
-  void hydrated;
   return [value, set];
 }
 
