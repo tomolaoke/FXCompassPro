@@ -3,11 +3,21 @@ import { createFileRoute } from "@tanstack/react-router";
 /**
  * Server-sent-events live feed. Streams price snapshots for the requested
  * symbols plus every event published through /api/public/events.
+ *
+ * Gated by PUBLIC_API_TOKEN — see public-api-auth.server.ts. Without a
+ * configured token this endpoint refuses every request: an open SSE stream
+ * that polls the market-data provider every 20 seconds per connection is
+ * exactly the kind of thing that drains a shared free-tier API quota if it's
+ * reachable by anyone who finds the URL.
  */
 export const Route = createFileRoute("/api/public/feed")({
   server: {
     handlers: {
       GET: async ({ request }) => {
+        const { checkPublicApiAuth } = await import("@/lib/market/public-api-auth.server");
+        const auth = checkPublicApiAuth(request);
+        if (!auth.ok) return auth.response!;
+
         const url = new URL(request.url);
         const symbols = (url.searchParams.get("symbols") ?? "XAUUSD,EURUSD")
           .split(",")
@@ -82,7 +92,7 @@ export const Route = createFileRoute("/api/public/feed")({
             "content-type": "text/event-stream",
             "cache-control": "no-cache, no-transform",
             connection: "keep-alive",
-            "access-control-allow-origin": "*",
+            ...auth.corsHeaders,
           },
         });
       },
