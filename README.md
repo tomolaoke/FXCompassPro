@@ -2,7 +2,7 @@
 
 **Educational multi-timeframe market analysis for forex and gold.**
 
-FX Compass Pro reads eight timeframes of a currency pair, states what each one is
+FX Compass Pro reads all nine timeframes of a currency pair, states what each one is
 doing, and tells you plainly whether they agree. When the short-term charts point
 one way and the higher timeframes point the other, it says so — loudly — instead
 of showing you a green BUY badge.
@@ -25,9 +25,10 @@ FX Compass Pro is built on the opposite principle:
 
 - **Short-term direction and higher-timeframe bias are computed separately and
   displayed separately.** They are never merged into one vote.
-- **A plain `BUY` or `SELL` is only ever shown when every configured timeframe
-  agrees.** Anything else is labelled, e.g.
-  `SHORT-TERM BUY — HIGHER-TIMEFRAME BEARISH CONFLICT`.
+- **There is no plain `BUY` or `SELL` label at all.** The strongest thing the
+  app will say is `FULLY ALIGNED BUY READY`, and only when every configured
+  timeframe agrees. A conflicted setup reads
+  `BUY READY — COUNTERTREND WARNING`.
 - **`NOT CONFIGURED` means one thing only:** the active strategy deliberately
   excludes that timeframe. It is never used for a timeframe that disagrees, is
   unclear, or has no data. Those have their own states.
@@ -40,66 +41,103 @@ FX Compass Pro is built on the opposite principle:
 
 ## Timeframe model
 
-Two groups, both configurable in one place
+**All nine timeframes are analysed and used** — MN, W1, D1, H4, H1, M30, M15,
+M5, M1. Every one is fetched, validated, calculated, timestamped, displayed and
+stored in the audit trail. None is silently ignored.
+
+They do not carry equal authority, because they do not answer the same question.
+A 1-minute chart agreeing with a monthly chart is not evidence of anything. Five
+tiers, all configurable in one place
 ([`src/lib/market/config/timeframes.ts`](src/lib/market/config/timeframes.ts)):
 
-| Group | Timeframes | Role |
+| Tier | Timeframes | Authority |
 | --- | --- | --- |
-| **Execution / short-term** | M5, M15, M30, H1 | Direction and entry timing |
-| **Context / higher-timeframe** | H4, D1, W1, MN | Bias, filters, permission |
+| **Broad context** | MN, W1 | Gates the FULLY ALIGNED label. Conflict warns and caps the score; it does not on its own cancel a setup. |
+| **Primary directional context** | D1, H4 | Strongest weight. Strong conflict normally means WATCH or WAIT. |
+| **Operational confirmation** | H1, M30, M15 | Confirms direction, momentum, structure and location. |
+| **Entry confirmation** | M5 | Confirms an entry that already exists. Cannot create one, cannot affect bias. |
+| **Execution trigger** | M1 | Times the entry. Cannot affect bias, quality or higher-timeframe direction. |
 
-H4 and D1 carry extra weight: a conflict there is shown more prominently than a
-W1/MN conflict, because they are the timeframes that most often decide whether an
-intraday idea survives the session.
+Only the first three tiers can contribute to a direction. That is enforced by
+construction: M5 and M1 are not in the list the engine reads directions from, so
+no bug can let them vote.
+
+From those tiers two summary groups are derived and reported separately, never
+averaged together:
+
+- **Higher-timeframe bias** — MN, W1, D1, H4
+- **Short-term direction** — H1, M30, M15, M5, M1
 
 ### Timeframe states
 
-Every timeframe always has exactly one explicit state. There is no implicit or
-blank state.
+Every timeframe always has exactly one explicit state.
 
 | State | Meaning |
 | --- | --- |
-| `BULLISH` | Rules resolved upward on closed data |
-| `BEARISH` | Rules resolved downward on closed data |
+| `BULLISH` / `BEARISH` | Rules resolved directionally on closed data |
 | `NEUTRAL` | Rules resolved, with no directional edge |
 | `INCONCLUSIVE` | Rules ran but did not produce a clear reading |
 | `DATA_MISSING` | No candles, or not enough history |
-| `DATA_STALE` | Candles are older than the freshness limit for this timeframe |
+| `DATA_STALE` | Older than the freshness limit for that timeframe |
 | `DATA_DELAYED` | Provider explicitly reports delayed data |
+| `DATA_INVALID` | Malformed OHLC or failed schema validation |
 | `CANDLE_OPEN` | Latest candle has not closed; any reading is provisional |
 | `NOT_CONFIGURED` | **Intentionally excluded by the active strategy config** |
 
-Alongside the state, each timeframe reports: last candle timestamp, whether that
-candle is closed, data age, data provider, the exact conditions that produced the
-state, a heuristic score contribution, and — when unclear or unavailable — the
-specific reason.
+Since all nine are configured by default, `NOT_CONFIGURED` does not normally
+appear at all. It exists for when you deliberately switch one off.
 
-### Alignment
+**"Conflicting" is a relation, not a state.** A weekly chart is `BEARISH`; it is
+*conflicting relative to a proposed BUY*. Each timeframe therefore carries both
+a `state` and a `relation` (`AGREEING` / `CONFLICTING` / `NOT_APPLICABLE`), and
+the interface shows the pair: **"CONFLICTING (bearish)"**. Folding the two into
+one value would discard the direction and leave a bearish weekly under a SELL
+with nothing to be.
 
-| Label | Meaning |
+Alongside these, each timeframe reports: role · last candle timestamp · whether
+it is closed · data age · data provider · Stochastic detail · the conditions
+that produced the state · score contribution · and, when unclear or unavailable,
+the specific reason.
+
+### Signal labels
+
+There is **no plain `BUY` or `SELL`**. A direction word never appears alone,
+because alone it is exactly what makes a beginner assume every chart agrees.
+
+| Label | When |
 | --- | --- |
-| `FULLY ALIGNED BUY` | Short-term and all configured context timeframes bullish |
-| `FULLY ALIGNED SELL` | Short-term and all configured context timeframes bearish |
-| `SHORT-TERM BUY WITH HIGHER-TIMEFRAME CONFLICT` | Countertrend upward |
-| `SHORT-TERM SELL WITH HIGHER-TIMEFRAME CONFLICT` | Countertrend downward |
-| `NEUTRAL / NO CLEAR SETUP` | Nothing resolved |
-| `INSUFFICIENT DATA` | Not enough valid timeframes to judge |
-| `DATA QUALITY ERROR` | A data problem blocks any conclusion |
+| `FULLY ALIGNED BUY READY` / `SELL READY` | Entry conditions pass and MN + W1 both agree |
+| `BUY READY — COUNTERTREND WARNING` / `SELL READY — …` | Entry conditions pass but MN and/or W1 disagree |
+| `BUY READY` / `SELL READY` | Entry conditions pass; MN/W1 neutral or unavailable — with the reason stated |
+| `BUY SETUP — WAITING FOR M5/M1 CONFIRMATION` / `SELL SETUP — …` | Direction established, entry not yet confirmed |
+| `WATCH — POTENTIAL BUY` / `POTENTIAL SELL` | Conditions developing |
+| `WAIT — NO VALID SETUP` | Nothing resolved |
+| `INSUFFICIENT DATA` · `DATA QUALITY ERROR` · `INVALID` · `EXPIRED` | Terminal states, overriding everything above |
+
+A green or red directional badge may render **only** for a READY label.
 
 ### Trade permission
 
-Alignment describes the market. **Permission** decides whether the app is willing
-to present a tradeable idea, under a configurable policy:
+The label describes the situation. **Permission** decides whether the app is
+willing to present a tradeable idea:
 
 | Mode | Behaviour |
 | --- | --- |
-| **`STRICT`** *(default)* | Any conflict, unclear reading or data problem on **any** configured timeframe produces `NO TRADE`. |
-| `TREND_FOLLOWING` | Permission requires agreement with the configured higher-timeframe filters (default H4 + D1). A W1/MN conflict warns and caps the score rather than blocking. |
-| `COUNTERTREND` | Off by default. Must be explicitly enabled. Countertrend setups are shown with a prominent high-risk warning. |
-| `MANUAL` | Full analysis is displayed; no trade permission is ever issued. |
+| **`TREND_FOLLOWING`** *(default)* | Requires agreement with the primary directional context (D1, H4). MN/W1 conflict warns, caps the score and blocks the FULLY ALIGNED label — but does not cancel the setup. |
+| `STRICT` | The stricter superset: additionally refuses on any MN/W1 conflict, any inconclusive reading, any data problem, and any provisional candle. |
+| `COUNTERTREND` | Off by default. Must be explicitly enabled. Prominent high-risk warning. |
+| `MANUAL` | Full analysis is displayed; no permission is ever issued. |
 
 Short-term direction is **never** converted automatically into a tradeable
 BUY or SELL.
+
+**The countertrend hard block.** MN/W1 disagreement alone does not cancel a
+setup. But when both broad-context *and* both primary-context timeframes oppose
+the direction, and the only argument for the trade is a stretched oscillator on
+a fast chart, the app refuses regardless of mode — that is catching a falling
+knife. A confirmed reversal structure on D1 or H4 (liquidity sweep followed by a
+change of character) lifts the block, and the setup shows with the countertrend
+warning instead.
 
 ---
 

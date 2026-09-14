@@ -13,6 +13,10 @@ miss. Each phase ends with `bun run check` green and the app still runnable.
 - [x] Page metadata renamed to FX Compass Pro
 
 ## Phase 1 — time and configuration (in progress)
+
+> Reconciled against CLAUDE.md: all nine timeframes are now analysed and used,
+> organised into five role tiers rather than two groups. Default permission mode
+> changed from STRICT to TREND_FOLLOWING.
 - [x] `config/timeframes.ts` — single source for roles, durations, freshness
       limits, expiry, minimum bars, base-series mapping
 - [x] `domain/states.ts` — the nine timeframe states, alignment, permission,
@@ -20,7 +24,11 @@ miss. Each phase ends with `bun run check` green and the app still runnable.
 - [x] `domain/clock.ts` — UTC storage, broker-server-time candle boundaries,
       real candle-close detection, DST-safe session logic
 - [x] `domain/clock.test.ts`
-- [ ] `config/strategy.ts` — versioned, content-hashed strategy configuration
+- [x] `config/strategy.ts` — versioned, content-hashed strategy configuration
+- [x] Five role tiers; M5 and M1 excluded from direction by construction
+- [x] Countertrend hard block with a documented reversal exception
+- [x] Stochastic events, separate from timeframe state
+- [x] The fifteen user-facing labels and their derivation
 
 ## Phase 2 — data integrity
 - [ ] `CandleSeries` provenance type; a bare `Candle[]` can no longer reach the engine

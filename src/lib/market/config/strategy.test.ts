@@ -4,16 +4,24 @@ import {
   DEFAULT_STRATEGY_CONFIG,
   allowsCountertrend,
   assertCoherent,
+  broadContextTimeframes,
   categoryCap,
   configuredTimeframes,
+  directionalTimeframes,
+  higherTimeframes,
   isConfigured,
+  isDirectionalRole,
   issuesPermission,
   maxScore,
   parseStrategyConfig,
+  primaryContextTimeframes,
   roleOf,
+  shortTermTimeframes,
   strategyVersion,
+  timeframesInRole,
   type StrategyConfig,
 } from "./strategy";
+import { ALL_TIMEFRAMES } from "./timeframes";
 
 /** Deep clone so a mutation in one test cannot leak into another. */
 const clone = (): StrategyConfig =>
@@ -28,18 +36,34 @@ describe("the default strategy", () => {
     expect(() => parseStrategyConfig(DEFAULT_STRATEGY_CONFIG)).not.toThrow();
   });
 
-  it("defaults to STRICT, not countertrend", () => {
-    expect(DEFAULT_STRATEGY_CONFIG.permissionMode).toBe("STRICT");
+  it("analyses and uses all nine timeframes", () => {
+    const configured = configuredTimeframes(DEFAULT_STRATEGY_CONFIG);
+    expect(configured).toHaveLength(9);
+    for (const tf of ALL_TIMEFRAMES) {
+      expect(isConfigured(tf, DEFAULT_STRATEGY_CONFIG)).toBe(true);
+    }
+  });
+
+  it("leaves no timeframe NOT_CONFIGURED by default", () => {
+    for (const tf of ALL_TIMEFRAMES) {
+      expect(roleOf(tf, DEFAULT_STRATEGY_CONFIG)).not.toBeNull();
+    }
+  });
+
+  it("assigns the five roles as specified", () => {
+    const c = DEFAULT_STRATEGY_CONFIG;
+    expect(timeframesInRole("BROAD_CONTEXT", c)).toEqual(["MN", "W1"]);
+    expect(timeframesInRole("PRIMARY_CONTEXT", c)).toEqual(["D1", "H4"]);
+    expect(timeframesInRole("OPERATIONAL", c)).toEqual(["H1", "M30", "M15"]);
+    expect(timeframesInRole("ENTRY_CONFIRMATION", c)).toEqual(["M5"]);
+    expect(timeframesInRole("EXECUTION_TRIGGER", c)).toEqual(["M1"]);
+  });
+
+  it("defaults to TREND_FOLLOWING, not countertrend", () => {
+    // MN/W1 conflict warns and caps the score rather than cancelling the setup;
+    // D1/H4 must still agree. STRICT is available as the stricter superset.
+    expect(DEFAULT_STRATEGY_CONFIG.permissionMode).toBe("TREND_FOLLOWING");
     expect(allowsCountertrend(DEFAULT_STRATEGY_CONFIG.permissionMode)).toBe(false);
-  });
-
-  it("splits execution and context as M5-H1 against H4-MN", () => {
-    expect(DEFAULT_STRATEGY_CONFIG.executionTimeframes).toEqual(["M5", "M15", "M30", "H1"]);
-    expect(DEFAULT_STRATEGY_CONFIG.contextTimeframes).toEqual(["H4", "D1", "W1", "MN"]);
-  });
-
-  it("treats H4 and D1 as the decisive context filters", () => {
-    expect(DEFAULT_STRATEGY_CONFIG.primaryContextFilters).toEqual(["H4", "D1"]);
   });
 
   it("uses the user's Stochastic 25,2,4 at 20/30/70/80", () => {
@@ -63,6 +87,15 @@ describe("the default strategy", () => {
     expect(DEFAULT_STRATEGY_CONFIG.structure.requireStructure).toBe(true);
   });
 
+  it("enables the countertrend hard block with a reversal exception", () => {
+    const { countertrendBlock } = DEFAULT_STRATEGY_CONFIG;
+    expect(countertrendBlock.enabled).toBe(true);
+    expect(countertrendBlock.minOpposingBroadContext).toBe(2);
+    expect(countertrendBlock.minOpposingPrimaryContext).toBe(2);
+    expect(countertrendBlock.reversalExceptionEnabled).toBe(true);
+    expect(countertrendBlock.reversalExceptionTimeframes).toEqual(["D1", "H4"]);
+  });
+
   it("caps a conflicted setup below the HIGH threshold", () => {
     const { conflictScoreCap, highThreshold } = DEFAULT_STRATEGY_CONFIG.scoring;
     expect(conflictScoreCap).toBeLessThan(highThreshold);
@@ -82,6 +115,51 @@ describe("the default strategy", () => {
 
   it("refuses synthetic data", () => {
     expect(DEFAULT_STRATEGY_CONFIG.dataQuality.rejectSyntheticData).toBe(true);
+  });
+});
+
+describe("who may decide direction", () => {
+  const c = DEFAULT_STRATEGY_CONFIG;
+
+  it("excludes M5 and M1 from the directional timeframes", () => {
+    // The rule "M5 and M1 must never determine market direction" is enforced by
+    // construction: they are not in the list an engine could read from.
+    const directional = directionalTimeframes(c);
+    expect(directional).not.toContain("M5");
+    expect(directional).not.toContain("M1");
+  });
+
+  it("lets broad, primary and operational tiers decide direction", () => {
+    expect(directionalTimeframes(c)).toEqual(["MN", "W1", "D1", "H4", "H1", "M30", "M15"]);
+  });
+
+  it("classifies only the first three roles as directional", () => {
+    expect(isDirectionalRole("BROAD_CONTEXT")).toBe(true);
+    expect(isDirectionalRole("PRIMARY_CONTEXT")).toBe(true);
+    expect(isDirectionalRole("OPERATIONAL")).toBe(true);
+    expect(isDirectionalRole("ENTRY_CONFIRMATION")).toBe(false);
+    expect(isDirectionalRole("EXECUTION_TRIGGER")).toBe(false);
+  });
+
+  it("still includes M5 and M1 on the short-term side, where they do their jobs", () => {
+    // Not directional, but not ignored either: they confirm and time entries.
+    expect(shortTermTimeframes(c)).toEqual(["H1", "M30", "M15", "M5", "M1"]);
+  });
+
+  it("splits the two summary groups without overlap and without loss", () => {
+    const higher = higherTimeframes(c);
+    const short = shortTermTimeframes(c);
+    expect(higher).toEqual(["MN", "W1", "D1", "H4"]);
+    expect(higher.filter((tf) => short.includes(tf))).toEqual([]);
+    expect([...higher, ...short].sort()).toEqual([...configuredTimeframes(c)].sort());
+  });
+
+  it("gates FULLY ALIGNED on MN and W1", () => {
+    expect(broadContextTimeframes(c)).toEqual(["MN", "W1"]);
+  });
+
+  it("treats D1 and H4 as the primary directional filters", () => {
+    expect(primaryContextTimeframes(c)).toEqual(["D1", "H4"]);
   });
 });
 
@@ -122,9 +200,16 @@ describe("versioning", () => {
     expect(strategyVersion(config)).not.toBe(strategyVersion(DEFAULT_STRATEGY_CONFIG));
   });
 
+  it("changes when a timeframe moves role", () => {
+    const config = clone();
+    config.roles.PRIMARY_CONTEXT = ["D1", "H4", "H1"];
+    config.roles.OPERATIONAL = ["M30", "M15"];
+    expect(strategyVersion(config)).not.toBe(strategyVersion(DEFAULT_STRATEGY_CONFIG));
+  });
+
   it("distinguishes timeframe order, which is meaningful", () => {
     const config = clone();
-    config.contextTimeframes = ["MN", "W1", "D1", "H4"];
+    config.roles.BROAD_CONTEXT = ["W1", "MN"];
     expect(strategyVersion(config)).not.toBe(strategyVersion(DEFAULT_STRATEGY_CONFIG));
   });
 
@@ -180,22 +265,50 @@ describe("coherence checks", () => {
     }, "conflictScoreCap");
   });
 
-  it("rejects a timeframe placed in both groups", () => {
+  it("rejects a timeframe assigned to two roles", () => {
     expectRejected((c) => {
-      c.contextTimeframes = ["H1", "H4", "D1", "W1"];
-    }, "cannot be both execution and context");
+      c.roles.OPERATIONAL = ["H1", "M30", "M15", "H4"];
+    }, "assigned to both");
   });
 
-  it("rejects a primary filter that is not a context timeframe", () => {
+  it("rejects a strategy with nothing able to decide direction", () => {
     expectRejected((c) => {
-      c.primaryContextFilters = ["M15"];
-    }, "subset of contextTimeframes");
+      c.roles.OPERATIONAL = [];
+      c.dataQuality.minShortTermTimeframes = 1;
+    }, "no OPERATIONAL timeframes");
+  });
+
+  it("rejects a strategy with no higher-timeframe context at all", () => {
+    expectRejected((c) => {
+      c.roles.BROAD_CONTEXT = [];
+      c.roles.PRIMARY_CONTEXT = [];
+      c.countertrendBlock.reversalExceptionTimeframes = [];
+      c.countertrendBlock.reversalExceptionEnabled = false;
+      c.dataQuality.minHigherTimeframes = 1;
+    }, "no higher-timeframe bias");
   });
 
   it("rejects a minimum-timeframe requirement that can never be met", () => {
     expectRejected((c) => {
-      c.dataQuality.minExecutionTimeframes = 8;
-    }, "minExecutionTimeframes");
+      c.dataQuality.minShortTermTimeframes = 9;
+    }, "minShortTermTimeframes");
+  });
+
+  it("rejects a reversal exception pointing at an unconfigured timeframe", () => {
+    expectRejected((c) => {
+      c.roles.PRIMARY_CONTEXT = ["D1"];
+      c.roles.OPERATIONAL = ["H4", "H1", "M30", "M15"];
+      c.countertrendBlock.reversalExceptionTimeframes = ["D1", "W1", "H4"];
+      // H4 is still configured; use a genuinely absent one instead.
+      c.roles.EXECUTION_TRIGGER = [];
+      c.countertrendBlock.reversalExceptionTimeframes = ["M1"];
+    }, "not configured");
+  });
+
+  it("rejects an unsatisfiable reversal exception", () => {
+    expectRejected((c) => {
+      c.countertrendBlock.reversalExceptionTimeframes = [];
+    }, "could never be satisfied");
   });
 
   it("refuses to let synthetic data be accepted", () => {
@@ -204,15 +317,21 @@ describe("coherence checks", () => {
     }, "rejectSyntheticData");
   });
 
-  it("accepts a legitimately different configuration", () => {
+  it("accepts a legitimately reduced configuration", () => {
     const config = clone();
-    config.permissionMode = "TREND_FOLLOWING";
-    config.executionTimeframes = ["M15", "H1"];
-    config.contextTimeframes = ["H4", "D1"];
-    config.primaryContextFilters = ["D1"];
-    config.dataQuality.minExecutionTimeframes = 2;
-    config.dataQuality.minContextTimeframes = 2;
+    config.permissionMode = "STRICT";
+    config.roles.BROAD_CONTEXT = ["W1"];
+    config.roles.PRIMARY_CONTEXT = ["D1", "H4"];
+    config.roles.OPERATIONAL = ["H1", "M15"];
+    config.roles.ENTRY_CONFIRMATION = ["M5"];
+    config.roles.EXECUTION_TRIGGER = [];
+    config.dataQuality.minShortTermTimeframes = 2;
+    config.dataQuality.minHigherTimeframes = 2;
     expect(() => assertCoherent(config)).not.toThrow();
+    // MN and M30 are now genuinely excluded — the one meaning NOT_CONFIGURED
+    // is allowed to carry.
+    expect(isConfigured("MN", config)).toBe(false);
+    expect(isConfigured("M30", config)).toBe(false);
   });
 });
 
@@ -224,8 +343,14 @@ describe("parseStrategyConfig", () => {
   });
 
   it("rejects an unknown timeframe", () => {
+    const config = clone();
+    (config.roles as unknown as Record<string, string[]>)["OPERATIONAL"] = ["M7"];
+    expect(() => parseStrategyConfig(config)).toThrow();
+  });
+
+  it("rejects an unknown role", () => {
     const config = clone() as unknown as Record<string, unknown>;
-    config["executionTimeframes"] = ["M7"];
+    config["roles"] = { EVERYTHING: ["M5"] };
     expect(() => parseStrategyConfig(config)).toThrow();
   });
 
@@ -244,7 +369,7 @@ describe("parseStrategyConfig", () => {
   it("returns a versioned strategy for valid input", () => {
     const result = parseStrategyConfig(DEFAULT_STRATEGY_CONFIG);
     expect(result.version).toBe(DEFAULT_STRATEGY.version);
-    expect(result.config.permissionMode).toBe("STRICT");
+    expect(result.config.permissionMode).toBe("TREND_FOLLOWING");
   });
 
   it("catches an incoherent config that nonetheless satisfies the schema", () => {
@@ -257,35 +382,37 @@ describe("parseStrategyConfig", () => {
 describe("reading the config", () => {
   const config = DEFAULT_STRATEGY_CONFIG;
 
-  it("reports configured timeframes as configured", () => {
-    for (const tf of ["M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"] as const) {
-      expect(isConfigured(tf, config)).toBe(true);
-    }
+  it("assigns a role to every timeframe", () => {
+    expect(roleOf("MN", config)).toBe("BROAD_CONTEXT");
+    expect(roleOf("W1", config)).toBe("BROAD_CONTEXT");
+    expect(roleOf("D1", config)).toBe("PRIMARY_CONTEXT");
+    expect(roleOf("H4", config)).toBe("PRIMARY_CONTEXT");
+    expect(roleOf("H1", config)).toBe("OPERATIONAL");
+    expect(roleOf("M30", config)).toBe("OPERATIONAL");
+    expect(roleOf("M15", config)).toBe("OPERATIONAL");
+    expect(roleOf("M5", config)).toBe("ENTRY_CONFIRMATION");
+    expect(roleOf("M1", config)).toBe("EXECUTION_TRIGGER");
   });
 
-  it("reports M1 as not configured by default", () => {
-    // M1 exists so it can be charted or deliberately enabled. Outside the
-    // active config it is NOT_CONFIGURED — which is what that state is for.
-    expect(isConfigured("M1", config)).toBe(false);
-    expect(roleOf("M1", config)).toBe("NOT_CONFIGURED");
-  });
-
-  it("assigns roles from the two groups", () => {
-    expect(roleOf("M15", config)).toBe("EXECUTION");
-    expect(roleOf("D1", config)).toBe("CONTEXT");
-  });
-
-  it("lists execution timeframes before context ones", () => {
+  it("lists timeframes slowest first, in role order", () => {
     expect(configuredTimeframes(config)).toEqual([
-      "M5",
-      "M15",
-      "M30",
-      "H1",
-      "H4",
-      "D1",
-      "W1",
       "MN",
+      "W1",
+      "D1",
+      "H4",
+      "H1",
+      "M30",
+      "M15",
+      "M5",
+      "M1",
     ]);
+  });
+
+  it("returns null for a timeframe the strategy excludes", () => {
+    const reduced = clone();
+    reduced.roles.EXECUTION_TRIGGER = [];
+    expect(roleOf("M1", reduced)).toBeNull();
+    expect(isConfigured("M1", reduced)).toBe(false);
   });
 
   it("exposes per-category caps", () => {

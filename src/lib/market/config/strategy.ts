@@ -15,11 +15,13 @@
 
 import { z } from "zod";
 import {
-  DEFAULT_CONTEXT_TIMEFRAMES,
-  DEFAULT_EXECUTION_TIMEFRAMES,
-  DEFAULT_PRIMARY_CONTEXT_FILTERS,
+  DEFAULT_ROLE_ASSIGNMENT,
+  HIGHER_TIMEFRAME_ROLES,
+  SHORT_TERM_ROLES,
   TIMEFRAME_IDS,
+  TIMEFRAME_ROLES,
   type Timeframe,
+  type TimeframeRole,
 } from "./timeframes";
 import { PERMISSION_MODES, type PermissionMode, type ScoreCategory } from "../domain/states";
 
@@ -155,14 +157,41 @@ const scoringSchema = z.object({
 });
 
 const dataQualitySchema = z.object({
-  /** Minimum execution timeframes with a usable reading before judging direction. */
-  minExecutionTimeframes: z.number().int().min(1).max(8),
-  /** Minimum context timeframes with a usable reading before judging bias. */
-  minContextTimeframes: z.number().int().min(1).max(8),
+  /** Minimum short-term timeframes with a usable reading before judging direction. */
+  minShortTermTimeframes: z.number().int().min(1).max(9),
+  /** Minimum higher timeframes with a usable reading before judging bias. */
+  minHigherTimeframes: z.number().int().min(1).max(9),
   /** Refuse to produce any signal from synthetic sample data. Never disable. */
   rejectSyntheticData: z.boolean(),
   /** Maximum acceptable divergence between provider and broker price, in pips. */
   maxBrokerDivergencePips: z.number().min(0).max(500),
+});
+
+/**
+ * The countertrend hard block.
+ *
+ * MN/W1 disagreement alone does not cancel an intraday setup — it lowers
+ * quality, warns, and blocks the FULLY ALIGNED label. But when the broad
+ * context, the primary directional context AND market structure are all
+ * strongly against the direction, and the only bullish argument is a stretched
+ * oscillator on a fast chart, that is catching a falling knife. This rule stops
+ * M1 and M5 from talking the engine into it.
+ */
+const countertrendBlockSchema = z.object({
+  enabled: z.boolean(),
+  /** Block when at least this many broad-context timeframes oppose. */
+  minOpposingBroadContext: z.number().int().min(0).max(2),
+  /** Block when at least this many primary-context timeframes oppose. */
+  minOpposingPrimaryContext: z.number().int().min(0).max(2),
+  /**
+   * The documented exception. When a confirmed reversal structure is present
+   * (a liquidity sweep followed by a change of character on a primary-context
+   * timeframe), the block is lifted and the setup is shown with the
+   * countertrend warning instead.
+   */
+  reversalExceptionEnabled: z.boolean(),
+  /** Timeframe on which the reversal structure must appear for the exception. */
+  reversalExceptionTimeframes: z.array(timeframeSchema).max(9),
 });
 
 const newsSchema = z.object({
@@ -178,14 +207,25 @@ const newsSchema = z.object({
   blockWhenUnavailable: z.boolean(),
 });
 
+/**
+ * Which timeframes sit in which role. All nine are assigned by default.
+ *
+ * A timeframe absent from every role is NOT_CONFIGURED — the only meaning that
+ * state is ever allowed to carry.
+ */
+const rolesSchema = z.object({
+  BROAD_CONTEXT: z.array(timeframeSchema).max(9),
+  PRIMARY_CONTEXT: z.array(timeframeSchema).max(9),
+  OPERATIONAL: z.array(timeframeSchema).max(9),
+  ENTRY_CONFIRMATION: z.array(timeframeSchema).max(9),
+  EXECUTION_TRIGGER: z.array(timeframeSchema).max(9),
+});
+
 export const strategyConfigSchema = z.object({
   name: z.string().min(1).max(80),
   description: z.string().max(400),
   permissionMode: z.enum(PERMISSION_MODES),
-  executionTimeframes: z.array(timeframeSchema).min(1).max(8),
-  contextTimeframes: z.array(timeframeSchema).min(1).max(8),
-  /** Context timeframes treated as decisive in TREND_FOLLOWING mode. */
-  primaryContextFilters: z.array(timeframeSchema).max(8),
+  roles: rolesSchema,
   momentum: momentumSchema,
   location: locationSchema,
   structure: structureSchema,
@@ -194,6 +234,7 @@ export const strategyConfigSchema = z.object({
   entry: entrySchema,
   scoring: scoringSchema,
   dataQuality: dataQualitySchema,
+  countertrendBlock: countertrendBlockSchema,
   news: newsSchema,
 });
 
@@ -213,14 +254,27 @@ export const DEFAULT_STRATEGY_CONFIG: StrategyConfig = {
   description:
     "Stochastic 25,2,4 is the primary directional gate. Location and market structure must confirm before any trade permission is issued. Trend and volatility act as filters. Short-term direction and higher-timeframe bias are computed separately and never merged.",
 
-  // STRICT by default: any conflict, unclear reading or data problem on any
-  // configured timeframe produces NO TRADE. This is the stricter superset of
-  // TREND_FOLLOWING, not a combination of the two.
-  permissionMode: "STRICT",
+  /**
+   * TREND_FOLLOWING by default.
+   *
+   * Permission requires agreement with the primary directional context (D1 and
+   * H4). A broad-context conflict on MN or W1 warns, caps the score, and blocks
+   * the FULLY ALIGNED label — but does not on its own cancel the setup.
+   *
+   * STRICT is available and is a stricter superset: it additionally refuses on
+   * any MN/W1 conflict, any inconclusive reading, any data problem, and any
+   * provisional candle. The two are separate modes, not a combination.
+   */
+  permissionMode: "TREND_FOLLOWING",
 
-  executionTimeframes: [...DEFAULT_EXECUTION_TIMEFRAMES],
-  contextTimeframes: [...DEFAULT_CONTEXT_TIMEFRAMES],
-  primaryContextFilters: [...DEFAULT_PRIMARY_CONTEXT_FILTERS],
+  // All nine timeframes are analysed and used.
+  roles: {
+    BROAD_CONTEXT: [...DEFAULT_ROLE_ASSIGNMENT.BROAD_CONTEXT],
+    PRIMARY_CONTEXT: [...DEFAULT_ROLE_ASSIGNMENT.PRIMARY_CONTEXT],
+    OPERATIONAL: [...DEFAULT_ROLE_ASSIGNMENT.OPERATIONAL],
+    ENTRY_CONFIRMATION: [...DEFAULT_ROLE_ASSIGNMENT.ENTRY_CONFIRMATION],
+    EXECUTION_TRIGGER: [...DEFAULT_ROLE_ASSIGNMENT.EXECUTION_TRIGGER],
+  },
 
   momentum: {
     kPeriod: 25,
@@ -292,10 +346,20 @@ export const DEFAULT_STRATEGY_CONFIG: StrategyConfig = {
   },
 
   dataQuality: {
-    minExecutionTimeframes: 3,
-    minContextTimeframes: 2,
+    minShortTermTimeframes: 3,
+    minHigherTimeframes: 2,
     rejectSyntheticData: true,
     maxBrokerDivergencePips: 5,
+  },
+
+  countertrendBlock: {
+    enabled: true,
+    // Both MN and W1 opposing, plus both D1 and H4 opposing, is the "falling
+    // knife" case. Anything less warns and caps the score instead.
+    minOpposingBroadContext: 2,
+    minOpposingPrimaryContext: 2,
+    reversalExceptionEnabled: true,
+    reversalExceptionTimeframes: ["D1", "H4"],
   },
 
   news: {
@@ -365,7 +429,7 @@ export const DEFAULT_STRATEGY: VersionedStrategy = versioned(DEFAULT_STRATEGY_CO
  */
 export function assertCoherent(config: StrategyConfig): void {
   const problems: string[] = [];
-  const { momentum, entry, scoring, executionTimeframes, contextTimeframes } = config;
+  const { momentum, entry, scoring } = config;
 
   if (momentum.deepOversold > momentum.oversold) {
     problems.push("momentum.deepOversold must be at or below momentum.oversold");
@@ -400,31 +464,71 @@ export function assertCoherent(config: StrategyConfig): void {
     );
   }
 
-  const overlap = executionTimeframes.filter((tf) => contextTimeframes.includes(tf));
-  if (overlap.length > 0) {
+  // A timeframe in two roles would be counted twice and would have two
+  // different authorities over the result.
+  const seen = new Map<Timeframe, TimeframeRole>();
+  for (const role of TIMEFRAME_ROLES) {
+    for (const tf of config.roles[role]) {
+      const existing = seen.get(tf);
+      if (existing) {
+        problems.push(
+          `${tf} is assigned to both ${existing} and ${role}. Each timeframe has exactly one role.`,
+        );
+      } else {
+        seen.set(tf, role);
+      }
+    }
+  }
+
+  // Direction has to come from somewhere, and it may not come from M5 or M1.
+  if (shortTermTimeframes(config).length === 0) {
     problems.push(
-      `a timeframe cannot be both execution and context: ${overlap.join(", ")}. ` +
-        "The two groups are analysed separately and must be disjoint.",
+      "no timeframes assigned to OPERATIONAL, ENTRY_CONFIRMATION or EXECUTION_TRIGGER, " +
+        "so there is nothing to read a short-term direction from",
+    );
+  }
+  if (higherTimeframes(config).length === 0) {
+    problems.push(
+      "no timeframes assigned to BROAD_CONTEXT or PRIMARY_CONTEXT, so there is no " +
+        "higher-timeframe bias to check a setup against",
+    );
+  }
+  if (config.roles.OPERATIONAL.length === 0) {
+    problems.push(
+      "no OPERATIONAL timeframes: M5 confirms entries and M1 times them, so neither " +
+        "may determine direction. Without an operational tier nothing can.",
     );
   }
 
-  const strayFilters = config.primaryContextFilters.filter((tf) => !contextTimeframes.includes(tf));
-  if (strayFilters.length > 0) {
+  if (config.dataQuality.minShortTermTimeframes > shortTermTimeframes(config).length) {
     problems.push(
-      `primaryContextFilters must be a subset of contextTimeframes: ${strayFilters.join(", ")}`,
+      "dataQuality.minShortTermTimeframes exceeds the number of configured short-term " +
+        "timeframes, so no signal could ever be produced",
+    );
+  }
+  if (config.dataQuality.minHigherTimeframes > higherTimeframes(config).length) {
+    problems.push(
+      "dataQuality.minHigherTimeframes exceeds the number of configured higher " +
+        "timeframes, so no signal could ever be produced",
     );
   }
 
-  if (config.dataQuality.minExecutionTimeframes > executionTimeframes.length) {
+  const strayReversal = config.countertrendBlock.reversalExceptionTimeframes.filter(
+    (tf) => !isConfigured(tf, config),
+  );
+  if (strayReversal.length > 0) {
     problems.push(
-      "dataQuality.minExecutionTimeframes exceeds the number of configured execution timeframes, " +
-        "so no signal could ever be produced",
+      "countertrendBlock.reversalExceptionTimeframes references timeframes that are not " +
+        `configured: ${strayReversal.join(", ")}`,
     );
   }
-  if (config.dataQuality.minContextTimeframes > contextTimeframes.length) {
+  if (
+    config.countertrendBlock.reversalExceptionEnabled &&
+    config.countertrendBlock.reversalExceptionTimeframes.length === 0
+  ) {
     problems.push(
-      "dataQuality.minContextTimeframes exceeds the number of configured context timeframes, " +
-        "so no signal could ever be produced",
+      "countertrendBlock.reversalExceptionEnabled is true but no reversalExceptionTimeframes " +
+        "are set, so the exception could never be satisfied",
     );
   }
 
@@ -451,21 +555,78 @@ export function assertCoherent(config: StrategyConfig): void {
  * with everything else.
  */
 export function isConfigured(tf: Timeframe, config: StrategyConfig): boolean {
-  return config.executionTimeframes.includes(tf) || config.contextTimeframes.includes(tf);
+  return roleOf(tf, config) !== null;
 }
 
-export function roleOf(
-  tf: Timeframe,
-  config: StrategyConfig,
-): "EXECUTION" | "CONTEXT" | "NOT_CONFIGURED" {
-  if (config.executionTimeframes.includes(tf)) return "EXECUTION";
-  if (config.contextTimeframes.includes(tf)) return "CONTEXT";
-  return "NOT_CONFIGURED";
+/** The role a timeframe holds, or null when the strategy excludes it. */
+export function roleOf(tf: Timeframe, config: StrategyConfig): TimeframeRole | null {
+  for (const role of TIMEFRAME_ROLES) {
+    if (config.roles[role].includes(tf)) return role;
+  }
+  return null;
 }
 
-/** Every configured timeframe, execution first, then context. */
+/** Every configured timeframe, in role order: broad context first, trigger last. */
 export function configuredTimeframes(config: StrategyConfig): Timeframe[] {
-  return [...config.executionTimeframes, ...config.contextTimeframes];
+  return TIMEFRAME_ROLES.flatMap((role) => config.roles[role]);
+}
+
+export function timeframesInRole(role: TimeframeRole, config: StrategyConfig): Timeframe[] {
+  return [...config.roles[role]];
+}
+
+/**
+ * Timeframes that may contribute to the higher-timeframe bias: MN, W1, D1, H4.
+ */
+export function higherTimeframes(config: StrategyConfig): Timeframe[] {
+  return HIGHER_TIMEFRAME_ROLES.flatMap((role) => config.roles[role]);
+}
+
+/**
+ * Timeframes on the short-term side: H1, M30, M15, M5, M1.
+ *
+ * Note this is not the same as "timeframes that vote on direction" — see
+ * directionalTimeframes. M5 and M1 are on the short-term side but confirm and
+ * time an entry rather than deciding which way the market is going.
+ */
+export function shortTermTimeframes(config: StrategyConfig): Timeframe[] {
+  return SHORT_TERM_ROLES.flatMap((role) => config.roles[role]);
+}
+
+/**
+ * The only timeframes allowed to contribute to a directional reading.
+ *
+ * ENTRY_CONFIRMATION and EXECUTION_TRIGGER are excluded by construction, which
+ * is how "M5 and M1 must never determine market direction" is enforced: an
+ * engine bug cannot let them vote, because they are never in this list.
+ */
+export function directionalTimeframes(config: StrategyConfig): Timeframe[] {
+  return [
+    ...config.roles.BROAD_CONTEXT,
+    ...config.roles.PRIMARY_CONTEXT,
+    ...config.roles.OPERATIONAL,
+  ];
+}
+
+export function isDirectionalRole(role: TimeframeRole): boolean {
+  return role === "BROAD_CONTEXT" || role === "PRIMARY_CONTEXT" || role === "OPERATIONAL";
+}
+
+/**
+ * Broad context (MN, W1) gates the FULLY ALIGNED label: alignment there is
+ * required before a setup may be called fully aligned, and conflict there
+ * produces the countertrend warning.
+ */
+export function broadContextTimeframes(config: StrategyConfig): Timeframe[] {
+  return [...config.roles.BROAD_CONTEXT];
+}
+
+/**
+ * Primary directional context (D1, H4) carries the most weight. In
+ * TREND_FOLLOWING mode these must agree before permission is issued.
+ */
+export function primaryContextTimeframes(config: StrategyConfig): Timeframe[] {
+  return [...config.roles.PRIMARY_CONTEXT];
 }
 
 export function categoryCap(category: ScoreCategory, config: StrategyConfig): number {

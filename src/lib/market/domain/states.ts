@@ -22,11 +22,43 @@ export const TIMEFRAME_STATES = [
   "DATA_MISSING",
   "DATA_STALE",
   "DATA_DELAYED",
+  "DATA_INVALID",
   "CANDLE_OPEN",
   "NOT_CONFIGURED",
 ] as const;
 
 export type TimeframeState = (typeof TIMEFRAME_STATES)[number];
+
+export const TIMEFRAME_STATE_LABEL: Record<TimeframeState, string> = {
+  BULLISH: "Bullish",
+  BEARISH: "Bearish",
+  NEUTRAL: "Neutral",
+  INCONCLUSIVE: "Inconclusive",
+  DATA_MISSING: "Data unavailable",
+  DATA_STALE: "Data stale",
+  DATA_DELAYED: "Data delayed",
+  DATA_INVALID: "Data invalid",
+  CANDLE_OPEN: "Candle still open",
+  NOT_CONFIGURED: "Not configured",
+};
+
+/**
+ * How a timeframe's state stands relative to the proposed direction.
+ *
+ * Deliberately separate from the state itself. "Conflicting" is a relation, not
+ * a reading: a weekly chart is BEARISH, and it is conflicting *relative to a
+ * proposed BUY*. Folding that into the state would lose the direction and make
+ * a bearish weekly under a SELL unrepresentable.
+ *
+ * The UI renders the pair, e.g. "CONFLICTING (bearish)".
+ */
+export type StateRelation = "AGREEING" | "CONFLICTING" | "NOT_APPLICABLE";
+
+export const RELATION_LABEL: Record<StateRelation, string> = {
+  AGREEING: "Agreeing",
+  CONFLICTING: "Conflicting",
+  NOT_APPLICABLE: "—",
+};
 
 /**
  * States that mean "the data itself is not usable".
@@ -37,6 +69,7 @@ export const DATA_PROBLEM_STATES = [
   "DATA_MISSING",
   "DATA_STALE",
   "DATA_DELAYED",
+  "DATA_INVALID",
 ] as const satisfies readonly TimeframeState[];
 
 export type DataProblemState = (typeof DATA_PROBLEM_STATES)[number];
@@ -99,8 +132,87 @@ export const GROUP_DIRECTIONS = [
 
 export type GroupDirection = (typeof GROUP_DIRECTIONS)[number];
 
-/** Which half of the analysis a timeframe belongs to. */
-export type TimeframeRole = "EXECUTION" | "CONTEXT";
+// ─── Stochastic events ───────────────────────────────────────────────────────
+
+/**
+ * What the oscillator did, as opposed to whether the data is usable.
+ *
+ * Orthogonal to TimeframeState on purpose. A timeframe can be CURLING_UP *and*
+ * DATA_STALE; merging the two vocabularies into one enum would make that
+ * unrepresentable and would quietly turn a data fault into a momentum reading.
+ */
+export const STOCHASTIC_EVENTS = [
+  "EXTREME_OVERSOLD",
+  "EXTREME_OVERBOUGHT",
+  "CURLING_UP",
+  "CURLING_DOWN",
+  "K_D_CROSS_UP",
+  "K_D_CROSS_DOWN",
+  "THRESHOLD_RECLAIM_UP",
+  "THRESHOLD_RECLAIM_DOWN",
+  "CONFIRMED_BULLISH",
+  "CONFIRMED_BEARISH",
+  "NEUTRAL",
+  "INCONCLUSIVE",
+] as const;
+
+export type StochasticEvent = (typeof STOCHASTIC_EVENTS)[number];
+
+export const STOCHASTIC_EVENT_LABEL: Record<StochasticEvent, string> = {
+  EXTREME_OVERSOLD: "Deeply oversold",
+  EXTREME_OVERBOUGHT: "Deeply overbought",
+  CURLING_UP: "Turning up from a low reading",
+  CURLING_DOWN: "Turning down from a high reading",
+  K_D_CROSS_UP: "%K crossed above %D",
+  K_D_CROSS_DOWN: "%K crossed below %D",
+  THRESHOLD_RECLAIM_UP: "%K closed back above the oversold level",
+  THRESHOLD_RECLAIM_DOWN: "%K closed back below the overbought level",
+  CONFIRMED_BULLISH: "Bullish, confirmed by price action and structure",
+  CONFIRMED_BEARISH: "Bearish, confirmed by price action and structure",
+  NEUTRAL: "No usable reading",
+  INCONCLUSIVE: "Mixed reading",
+};
+
+/**
+ * Events that are NOT on their own a trade signal.
+ *
+ * An extreme reading persists for months in a strong trend; a %K/%D cross and a
+ * threshold reclaim happen constantly. Only CONFIRMED_BULLISH and
+ * CONFIRMED_BEARISH — which additionally require price action and structure —
+ * may contribute to a trade-ready state.
+ */
+export const NON_SIGNAL_EVENTS = [
+  "EXTREME_OVERSOLD",
+  "EXTREME_OVERBOUGHT",
+  "CURLING_UP",
+  "CURLING_DOWN",
+  "K_D_CROSS_UP",
+  "K_D_CROSS_DOWN",
+  "THRESHOLD_RECLAIM_UP",
+  "THRESHOLD_RECLAIM_DOWN",
+] as const satisfies readonly StochasticEvent[];
+
+export function isTradeSignalEvent(event: StochasticEvent): boolean {
+  return event === "CONFIRMED_BULLISH" || event === "CONFIRMED_BEARISH";
+}
+
+/** The raw numbers behind an event, kept so any reading can be re-derived. */
+export interface StochasticReading {
+  readonly k: number | null;
+  readonly d: number | null;
+  readonly previousK: number | null;
+  readonly previousD: number | null;
+  readonly kSlope: number | null;
+  readonly dSlope: number | null;
+  readonly crossDirection: "UP" | "DOWN" | "NONE";
+  readonly thresholdCross: "RECLAIM_UP" | "BREAK_DOWN" | "NONE";
+  /** The level crossed, when one was. */
+  readonly crossedLevel: number | null;
+  readonly candleClosed: boolean;
+  readonly candleOpenTime: number;
+  readonly calculatedAt: number;
+  readonly event: StochasticEvent;
+}
 
 // ─── Layer 3: alignment ──────────────────────────────────────────────────────
 
@@ -148,6 +260,132 @@ export const PERMISSION_MODE_LABEL: Record<PermissionMode, string> = {
 };
 
 export type TradePermission = "BUY" | "SELL" | "NO_TRADE";
+
+// ─── Readiness and the user-facing label ─────────────────────────────────────
+
+/**
+ * How far along the validation ladder a setup has got. Each rung has its own
+ * gate; see docs/signal-states.md.
+ */
+export const READINESS_LEVELS = ["NONE", "WATCH", "SETUP", "READY"] as const;
+export type Readiness = (typeof READINESS_LEVELS)[number];
+
+/** How broad context (MN, W1) stands relative to the proposed direction. */
+export type BroadContextRelation = "ALIGNED" | "CONFLICTING" | "NEUTRAL" | "UNAVAILABLE";
+
+/**
+ * The exact strings shown to the user. There is no plain "BUY" or "SELL".
+ *
+ * A direction word never appears on its own, because on its own it is what
+ * makes a beginner assume every chart agrees.
+ */
+export const SIGNAL_LABELS = [
+  "WATCH — POTENTIAL BUY",
+  "WATCH — POTENTIAL SELL",
+  "BUY SETUP — WAITING FOR M5/M1 CONFIRMATION",
+  "SELL SETUP — WAITING FOR M5/M1 CONFIRMATION",
+  "BUY READY",
+  "SELL READY",
+  "BUY READY — COUNTERTREND WARNING",
+  "SELL READY — COUNTERTREND WARNING",
+  "FULLY ALIGNED BUY READY",
+  "FULLY ALIGNED SELL READY",
+  "WAIT — NO VALID SETUP",
+  "INSUFFICIENT DATA",
+  "DATA QUALITY ERROR",
+  "INVALID",
+  "EXPIRED",
+] as const;
+
+export type SignalLabel = (typeof SIGNAL_LABELS)[number];
+
+export interface LabelInput {
+  readonly direction: "BUY" | "SELL" | null;
+  readonly readiness: Readiness;
+  readonly broadContext: BroadContextRelation;
+  /** Overrides everything below it. */
+  readonly terminal?: "INSUFFICIENT_DATA" | "DATA_QUALITY_ERROR" | "INVALID" | "EXPIRED";
+}
+
+/**
+ * The single place a user-facing label is produced.
+ *
+ * Plain "BUY READY" means specifically: entry conditions pass, but MN/W1 are
+ * neutral or unavailable, so the setup cannot honestly be called fully aligned.
+ * That third case is real and needs its own label — without it, a setup with no
+ * weekly data would have to masquerade as either aligned or conflicted.
+ */
+export function signalLabel(input: LabelInput): SignalLabel {
+  switch (input.terminal) {
+    case "INSUFFICIENT_DATA":
+      return "INSUFFICIENT DATA";
+    case "DATA_QUALITY_ERROR":
+      return "DATA QUALITY ERROR";
+    case "INVALID":
+      return "INVALID";
+    case "EXPIRED":
+      return "EXPIRED";
+    default:
+      break;
+  }
+
+  if (input.direction === null || input.readiness === "NONE") return "WAIT — NO VALID SETUP";
+
+  const buy = input.direction === "BUY";
+
+  switch (input.readiness) {
+    case "WATCH":
+      return buy ? "WATCH — POTENTIAL BUY" : "WATCH — POTENTIAL SELL";
+    case "SETUP":
+      return buy
+        ? "BUY SETUP — WAITING FOR M5/M1 CONFIRMATION"
+        : "SELL SETUP — WAITING FOR M5/M1 CONFIRMATION";
+    case "READY":
+      switch (input.broadContext) {
+        case "ALIGNED":
+          return buy ? "FULLY ALIGNED BUY READY" : "FULLY ALIGNED SELL READY";
+        case "CONFLICTING":
+          return buy ? "BUY READY — COUNTERTREND WARNING" : "SELL READY — COUNTERTREND WARNING";
+        case "NEUTRAL":
+        case "UNAVAILABLE":
+          return buy ? "BUY READY" : "SELL READY";
+      }
+  }
+}
+
+/**
+ * Why a READY setup is not FULLY ALIGNED. Shown next to a plain BUY/SELL READY
+ * so the absence of the "fully aligned" wording is explained rather than left
+ * for the user to notice.
+ */
+export function notFullyAlignedReason(relation: BroadContextRelation): string | null {
+  switch (relation) {
+    case "NEUTRAL":
+      return "Monthly and weekly charts show no clear direction, so this cannot be called fully aligned.";
+    case "UNAVAILABLE":
+      return "Monthly and/or weekly data is unavailable, so alignment with the bigger picture is unverified.";
+    case "CONFLICTING":
+      return "Monthly and/or weekly charts disagree with this direction. This is a countertrend setup and carries higher risk.";
+    case "ALIGNED":
+      return null;
+  }
+}
+
+/**
+ * Whether a label may be rendered with a bullish/bearish colour badge.
+ *
+ * Only the READY rungs qualify. WATCH, SETUP and every terminal state render
+ * neutral or amber, so a developing or broken setup can never look like a green
+ * go-ahead.
+ */
+export function allowsDirectionalBadge(label: SignalLabel): boolean {
+  return label.includes("READY");
+}
+
+/** READY labels that must additionally carry a prominent risk warning. */
+export function requiresCountertrendWarning(label: SignalLabel): boolean {
+  return label.includes("COUNTERTREND");
+}
 
 /**
  * Why a trade permission was refused. Every refusal names a reason; there is no

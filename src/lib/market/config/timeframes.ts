@@ -148,46 +148,140 @@ export const ALL_TIMEFRAMES: readonly Timeframe[] = TIMEFRAME_IDS;
 /** Ordered slowest to fastest — the order charts are usually read in. */
 export const ALL_TIMEFRAMES_DESC: readonly Timeframe[] = [...TIMEFRAME_IDS].reverse();
 
-// ─── Default groups ──────────────────────────────────────────────────────────
+// ─── Roles ───────────────────────────────────────────────────────────────────
 
 /**
- * Execution / short-term: what price is doing now.
- * Context / higher-timeframe: what it is doing in the larger picture.
+ * Five tiers, each with a different authority over the result.
  *
- * These two are analysed separately and never merged into a single vote. That
- * separation is the point of the application.
+ * The tiers exist because "which timeframes agree" is the wrong question. A
+ * 1-minute chart agreeing with a monthly chart is not evidence of anything —
+ * they answer different questions. M1 times an entry; it must never be able to
+ * argue about direction. M5 confirms a setup that already exists; it must never
+ * create one.
  */
-export const DEFAULT_EXECUTION_TIMEFRAMES: readonly Timeframe[] = ["M5", "M15", "M30", "H1"];
+export const TIMEFRAME_ROLES = [
+  "BROAD_CONTEXT",
+  "PRIMARY_CONTEXT",
+  "OPERATIONAL",
+  "ENTRY_CONFIRMATION",
+  "EXECUTION_TRIGGER",
+] as const;
 
-export const DEFAULT_CONTEXT_TIMEFRAMES: readonly Timeframe[] = ["H4", "D1", "W1", "MN"];
+export type TimeframeRole = (typeof TIMEFRAME_ROLES)[number];
 
-/**
- * Context timeframes whose conflict is treated as decisive in TREND_FOLLOWING
- * mode, and rendered most prominently everywhere.
- *
- * H4 and D1 are the timeframes that most often decide whether an intraday idea
- * survives the session, and the ones a beginner is most likely to overlook.
- */
-export const DEFAULT_PRIMARY_CONTEXT_FILTERS: readonly Timeframe[] = ["H4", "D1"];
+export const ROLE_LABEL: Record<TimeframeRole, string> = {
+  BROAD_CONTEXT: "Broad context",
+  PRIMARY_CONTEXT: "Primary directional context",
+  OPERATIONAL: "Operational confirmation",
+  ENTRY_CONFIRMATION: "Entry confirmation",
+  EXECUTION_TRIGGER: "Execution trigger",
+};
 
-/**
- * Relative weight of a conflict on each context timeframe. Used for the
- * conflict penalty and for display prominence — not for voting, because
- * context timeframes do not vote.
- */
-export const CONTEXT_CONFLICT_WEIGHT: Partial<Record<Timeframe, number>> = {
-  H4: 1.0,
-  D1: 1.0,
-  W1: 0.6,
-  MN: 0.4,
+export const ROLE_DESCRIPTION: Record<TimeframeRole, string> = {
+  BROAD_CONTEXT:
+    "The bigger picture. Always shown. Disagreement blocks the FULLY ALIGNED label and lowers setup quality, but does not by itself cancel an intraday setup.",
+  PRIMARY_CONTEXT:
+    "The strongest directional authority. Strong disagreement here normally means WAIT or WATCH.",
+  OPERATIONAL: "Confirms direction, momentum, structure and location.",
+  ENTRY_CONFIRMATION:
+    "Confirms an entry after a setup already exists. Cannot create a setup and cannot influence bias.",
+  EXECUTION_TRIGGER:
+    "Times the entry. Cannot influence bias, setup quality or higher-timeframe direction.",
 };
 
 /**
- * M1 is defined so it can be charted and enabled deliberately, but it is not in
- * either default group. A timeframe outside the active configuration reports
- * NOT_CONFIGURED — which is exactly what that state is for.
+ * All nine timeframes are analysed and used by default.
+ *
+ * M1 included: it is the final execution trigger. Leaving it out would make it
+ * NOT_CONFIGURED, which would be honest but would also discard the timing layer
+ * the strategy depends on.
  */
-export const DEFAULT_UNCONFIGURED: readonly Timeframe[] = ["M1"];
+export const DEFAULT_ROLE_ASSIGNMENT: Record<TimeframeRole, readonly Timeframe[]> = {
+  BROAD_CONTEXT: ["MN", "W1"],
+  PRIMARY_CONTEXT: ["D1", "H4"],
+  OPERATIONAL: ["H1", "M30", "M15"],
+  ENTRY_CONFIRMATION: ["M5"],
+  EXECUTION_TRIGGER: ["M1"],
+};
+
+/**
+ * Roles that may contribute to the directional reading.
+ *
+ * M5 and M1 are deliberately absent. This is the type-level expression of
+ * "M5 and M1 must never determine market direction" — a bug in the engine
+ * cannot let them vote, because they are not in this list.
+ */
+export const DIRECTIONAL_ROLES: readonly TimeframeRole[] = [
+  "BROAD_CONTEXT",
+  "PRIMARY_CONTEXT",
+  "OPERATIONAL",
+];
+
+/**
+ * The two summary groups, derived from the tiers.
+ *
+ * Higher-timeframe bias = broad + primary context (MN, W1, D1, H4).
+ * Short-term direction  = operational + entry + trigger (H1, M30, M15, M5, M1).
+ *
+ * These are computed separately and never merged into one vote, which is what
+ * makes "short-term bullish, higher timeframes bearish" expressible rather than
+ * silently averaged away.
+ */
+export const HIGHER_TIMEFRAME_ROLES: readonly TimeframeRole[] = [
+  "BROAD_CONTEXT",
+  "PRIMARY_CONTEXT",
+];
+
+export const SHORT_TERM_ROLES: readonly TimeframeRole[] = [
+  "OPERATIONAL",
+  "ENTRY_CONFIRMATION",
+  "EXECUTION_TRIGGER",
+];
+
+/**
+ * Relative weight of a conflict on each timeframe, for the conflict penalty and
+ * for display prominence.
+ *
+ * D1 and H4 weigh most: they most often decide whether an intraday idea
+ * survives the session, and a beginner is most likely to overlook them. MN and
+ * W1 weigh less per timeframe but gate the FULLY ALIGNED label outright, which
+ * no score can substitute for.
+ */
+export const CONFLICT_WEIGHT: Record<Timeframe, number> = {
+  MN: 0.5,
+  W1: 0.7,
+  D1: 1.0,
+  H4: 1.0,
+  H1: 0.6,
+  M30: 0.4,
+  M15: 0.4,
+  M5: 0.2,
+  M1: 0.1,
+};
+
+export function timeframesForRole(
+  role: TimeframeRole,
+  assignment: Record<TimeframeRole, readonly Timeframe[]> = DEFAULT_ROLE_ASSIGNMENT,
+): readonly Timeframe[] {
+  return assignment[role];
+}
+
+export function roleForTimeframe(
+  tf: Timeframe,
+  assignment: Record<TimeframeRole, readonly Timeframe[]> = DEFAULT_ROLE_ASSIGNMENT,
+): TimeframeRole | null {
+  for (const role of TIMEFRAME_ROLES) {
+    if (assignment[role].includes(tf)) return role;
+  }
+  return null;
+}
+
+/** Flattened, slowest first — the order a chart stack is read in. */
+export function timeframesInRoleOrder(
+  assignment: Record<TimeframeRole, readonly Timeframe[]> = DEFAULT_ROLE_ASSIGNMENT,
+): Timeframe[] {
+  return TIMEFRAME_ROLES.flatMap((role) => [...assignment[role]]);
+}
 
 // ─── Derived helpers ─────────────────────────────────────────────────────────
 
