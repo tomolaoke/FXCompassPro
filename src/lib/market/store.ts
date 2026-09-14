@@ -101,8 +101,10 @@ function useStoreValue<T>(
 }
 
 export function useSettings() {
-  const [settings, setSettings] = useStoreValue<AppSettings>(KEYS.settings, () =>
-    read(KEYS.settings, DEFAULT_SETTINGS),
+  const [settings, setSettings] = useStoreValue<AppSettings>(
+    KEYS.settings,
+    () => read(KEYS.settings, DEFAULT_SETTINGS),
+    DEFAULT_SETTINGS,
   );
   const update = useCallback(
     (patch: Partial<AppSettings>) => setSettings({ ...settings, ...patch }),
