@@ -233,7 +233,7 @@ export async function loadSeries(
  * request, so a whole watchlist costs one provider call per symbol.
  */
 async function twelveDataQuote(symbol: string, key: string): Promise<Quote | null> {
-  const candles = await loadBase(symbol, "M15", key);
+  const candles = await loadBase(symbol, "M1", key);
   const last = candles[candles.length - 1];
   if (!last) return null;
   const spec = specFor(symbol);
@@ -245,11 +245,11 @@ async function twelveDataQuote(symbol: string, key: string): Promise<Quote | nul
     ask: Number((close + spread / 2).toFixed(spec.digits)),
     mid: Number(close.toFixed(spec.digits)),
     spread: Number(spread.toFixed(spec.digits + 1)),
-    timestamp: last.t + TF_MINUTES.M15 * 60_000,
+    timestamp: last.t + TF_MINUTES.M1 * 60_000,
     provider: "TwelveData",
     kind: "delayed",
-    quality: 82,
-    note: "Real market price from TwelveData (last completed 15-minute candle). Bid/ask are estimated from a typical spread, not your broker's book.",
+    quality: 85,
+    note: "Real market price from TwelveData (last completed 1-minute candle). Bid/ask are estimated from a typical spread, not your broker's book.",
   };
 }
 
