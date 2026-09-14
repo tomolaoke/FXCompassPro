@@ -182,32 +182,26 @@ export async function loadSeries(
   let realCount = 0;
 
   if (key) {
-    const smallest = timeframes.reduce<Timeframe>(
-      (acc, tf) => (TF_MINUTES[tf] < TF_MINUTES[acc] ? tf : acc),
-      timeframes[0]!,
-    );
-    const needsDaily = timeframes.some((tf) => TF_MINUTES[tf] > TF_MINUTES.D1);
-    let intraday: Candle[] = [];
-    let daily: Candle[] = [];
+    // At most three provider requests per symbol cover all nine timeframes:
+    // M1 for the trigger, M5 for M5–H4, and D1 for D1–MN.
+    const needed = new Set<Timeframe>(timeframes.map(baseFor));
+    const bases: Partial<Record<Timeframe, Candle[]>> = {};
 
-    try {
-      intraday = await loadBase(symbol, smallest, key);
-    } catch (error) {
-      notes.push(`Intraday candles unavailable (${(error as Error).message}).`);
-    }
-    if (needsDaily) {
-      try {
-        daily = await loadBase(symbol, "D1", key);
-      } catch (error) {
-        notes.push(`Daily candles unavailable (${(error as Error).message}).`);
-      }
-    }
+    await Promise.all(
+      [...needed].map(async (base) => {
+        try {
+          bases[base] = await loadBase(symbol, base, key);
+        } catch (error) {
+          notes.push(`${base} candles unavailable (${(error as Error).message}).`);
+        }
+      }),
+    );
 
     for (const tf of timeframes) {
-      const isHigh = TF_MINUTES[tf] > TF_MINUTES.D1;
-      const source = isHigh ? daily : intraday;
-      if (!source.length) continue;
-      const rolled = tf === smallest && !isHigh ? source : aggregate(source, tf);
+      const base = baseFor(tf);
+      const source = bases[base];
+      if (!source?.length) continue;
+      const rolled = tf === base ? source : aggregate(source, tf);
       if (rolled.length < 30) {
         notes.push(`${tf}: not enough real history to read reliably.`);
         continue;
