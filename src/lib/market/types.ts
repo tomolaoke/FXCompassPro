@@ -193,6 +193,12 @@ export interface AppSettings {
   language: "en" | "caveman" | "pidgin";
   advancedView: boolean;
   provider: string;
+  /**
+   * Browser Notification API only — fires while the tab is open, not a real
+   * push. Off by default; permission must be requested from a click, never
+   * automatically. See notifications/use-notifications.ts.
+   */
+  notificationsEnabled: boolean;
 }
 
 export interface JournalEntry {

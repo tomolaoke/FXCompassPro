@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   language: "en",
   advancedView: false,
   provider: "demo",
+  notificationsEnabled: false,
 };
 
 const KEYS = {

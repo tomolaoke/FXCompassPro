@@ -1,9 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
+import { useMemo, useState } from "react";
 import { AppShell, Panel } from "@/components/app-shell";
 import { SignalCard } from "@/components/signal-card";
 import { useEngineSignalRun } from "@/lib/market/hooks";
 import { recordSignal } from "@/lib/market/market.functions";
+import {
+  getNotificationPermission,
+  requestNotificationPermission,
+  useSignalNotifications,
+  type NotificationPermissionState,
+} from "@/lib/market/notifications/use-notifications";
 import { newId, useSettings, useSignalRecords } from "@/lib/market/store";
 import type { Session } from "@/lib/market/types";
 
@@ -33,14 +40,34 @@ function toRecordSession(session: string): Session {
 }
 
 function Dashboard() {
-  const { settings } = useSettings();
+  const { settings, update } = useSettings();
   const { records, add } = useSignalRecords();
   const { data, isLoading, isError, refetch, isFetching } = useEngineSignalRun(settings);
   const persistSignal = useServerFn(recordSignal);
+  const [permission, setPermission] = useState<NotificationPermissionState>(() =>
+    getNotificationPermission(),
+  );
 
-  const rows = data?.rows ?? [];
+  const rows = useMemo(() => data?.rows ?? [], [data]);
   const ready = rows.filter((r) => r.signal.readiness === "READY").length;
   const watching = rows.filter((r) => r.signal.readiness === "WATCH").length;
+
+  const notifiableRows = useMemo(
+    () =>
+      rows.map((r) => ({ symbol: r.symbol, label: r.signal.label, readiness: r.signal.readiness })),
+    [rows],
+  );
+  useSignalNotifications(
+    notifiableRows,
+    { mutedSymbols: new Set(), quietHoursStart: null, quietHoursEnd: null },
+    settings.notificationsEnabled && permission === "granted",
+  );
+
+  const handleEnableNotifications = async () => {
+    const result = await requestNotificationPermission();
+    setPermission(result);
+    if (result === "granted") update({ notificationsEnabled: true });
+  };
 
   return (
     <AppShell>
@@ -48,13 +75,24 @@ function Dashboard() {
         <Panel
           title="Today"
           action={
-            <button
-              type="button"
-              onClick={() => void refetch()}
-              className="rounded-md border border-border px-3 py-1 text-xs font-medium hover:bg-accent"
-            >
-              {isFetching ? "Refreshing…" : "Refresh"}
-            </button>
+            <div className="flex gap-2">
+              {permission !== "unsupported" && !settings.notificationsEnabled && (
+                <button
+                  type="button"
+                  onClick={() => void handleEnableNotifications()}
+                  className="rounded-md border border-border px-3 py-1 text-xs font-medium hover:bg-accent"
+                >
+                  {permission === "denied" ? "Notifications blocked" : "Enable notifications"}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => void refetch()}
+                className="rounded-md border border-border px-3 py-1 text-xs font-medium hover:bg-accent"
+              >
+                {isFetching ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
           }
         >
           <div className="grid grid-cols-3 gap-2 text-center">
@@ -62,6 +100,12 @@ function Dashboard() {
             <Stat label="Watching" value={watching} tone="warn" />
             <Stat label="Pairs scanned" value={rows.length} />
           </div>
+          {settings.notificationsEnabled && permission === "granted" && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Notifications on — fires only while this tab is open, not a real push. See
+              docs/limitations.md.
+            </p>
+          )}
           <p className="mt-3 text-xs text-muted-foreground">
             All nine timeframes analysed — MN, W1, D1, H4, H1, M30, M15, M5, M1. Risk{" "}
             {settings.risk.riskPercent}% of {settings.risk.accountCurrency}{" "}
