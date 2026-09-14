@@ -1,6 +1,7 @@
 import { specFor } from "./instruments";
 import { demoCandles, demoQuote } from "./demo";
 import { normalizeCandles } from "./data/normalize";
+import { DEFAULT_CLOCK_CONFIG, bucketStart as brokerBucketStart } from "./domain/clock";
 import { TF_MINUTES, type Candle, type Quote, type Timeframe } from "./types";
 
 /**
@@ -54,6 +55,20 @@ function apiKey(): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+/**
+ * Synthetic candles exist so the interface can be built and reviewed without
+ * a provider key. They must never stand in for a real market in production:
+ * `ALLOW_DEMO_DATA` is ignored outright when `NODE_ENV === "production"`, so a
+ * misconfigured deploy cannot silently start showing sample data as if it were
+ * live. Without this, a quota exhaustion or provider outage on a live
+ * deployment would fall back to a seeded random walk and keep evaluating
+ * signals against it — the exact failure this application exists to prevent.
+ */
+function demoDataAllowed(): boolean {
+  if (process.env["NODE_ENV"] === "production") return false;
+  return process.env["ALLOW_DEMO_DATA"] === "true";
+}
+
 function tdSymbol(symbol: string): string {
   const s = symbol.toUpperCase();
   return s.length === 6 ? `${s.slice(0, 3)}/${s.slice(3)}` : s;
@@ -97,6 +112,36 @@ function isQuotaExhausted(now: number): boolean {
 const REQUEST_TIMEOUT_MS = 15_000;
 
 class TwelveDataQuotaError extends Error {}
+class TwelveDataBudgetError extends Error {}
+
+/**
+ * Paces our own outgoing requests against the free-tier per-minute credit
+ * limit, so a watchlist scan cannot burst past it and draw a 429 that a
+ * moment's spacing would have avoided.
+ *
+ * This is in-memory and per-process: on Vercel's serverless model a cold
+ * start resets it, same limitation the response cache and quota-exhaustion
+ * flag above already have. It still helps within a warm instance, which is
+ * where most of a session's requests land.
+ */
+const requestTimestamps: number[] = [];
+
+function creditsPerMinute(): number {
+  const raw = Number(process.env["TWELVEDATA_CREDITS_PER_MIN"]);
+  return Number.isFinite(raw) && raw > 0 ? raw : 8;
+}
+
+function withinBudget(now: number): boolean {
+  const windowStart = now - 60_000;
+  while (requestTimestamps.length > 0 && requestTimestamps[0]! < windowStart) {
+    requestTimestamps.shift();
+  }
+  return requestTimestamps.length < creditsPerMinute();
+}
+
+function recordRequest(now: number): void {
+  requestTimestamps.push(now);
+}
 
 async function getJson(url: string): Promise<unknown> {
   let res: Response;
@@ -167,26 +212,23 @@ function parseBars(raw: unknown, digits: number, expectedGapMs: number): Candle[
   return normalizeCandles(candles, expectedGapMs).candles;
 }
 
-/** UTC bucket start for a timestamp on a given timeframe. */
-function bucketStart(t: number, tf: Timeframe): number {
-  const d = new Date(t);
-  if (tf === "MN") return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
-  if (tf === "W1") {
-    const day = (d.getUTCDay() + 6) % 7; // Monday-based
-    const base = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-    return base - day * 86_400_000;
-  }
-  const ms = TF_MINUTES[tf] * 60_000;
-  return Math.floor(t / ms) * ms;
-}
-
-/** Rolls smaller candles up into a larger timeframe. */
+/**
+ * Rolls smaller candles up into a larger timeframe, bucketed on the broker's
+ * server day rather than the UTC day.
+ *
+ * MetaTrader brokers do not start the day at midnight UTC. HF Markets, like
+ * most, runs an EET/EEST server, so a plain `floor(t / msPerDay)` bucket puts
+ * the daily close several hours away from the one traders actually see — and
+ * silently misfiles the Sunday-evening market open into the wrong week. Using
+ * the same broker-session-aware `bucketStart` the live engine reads candles
+ * with is what makes the D1/H4/W1/MN series match the chart in the terminal.
+ */
 function aggregate(base: Candle[], tf: Timeframe): Candle[] {
   const out: Candle[] = [];
   let current: Candle | null = null;
   let currentKey = Number.NaN;
   for (const c of base) {
-    const key = bucketStart(c.t, tf);
+    const key = brokerBucketStart(c.t, tf, DEFAULT_CLOCK_CONFIG);
     if (!current || key !== currentKey) {
       if (current) out.push(current);
       current = { t: key, o: c.o, h: c.h, l: c.l, c: c.c };
@@ -215,16 +257,43 @@ const BASE_TTL: Partial<Record<Timeframe, number>> = {
   D1: 3_600_000,
 };
 
+/** Errors worth a couple of retries: transient network/server faults, not data or quota problems. */
+function isRetryable(error: unknown): boolean {
+  if (error instanceof TwelveDataQuotaError || error instanceof TwelveDataBudgetError) return false;
+  if (!(error instanceof Error)) return false;
+  return (
+    /timed out/i.test(error.message) ||
+    /^HTTP 5\d\d/.test(error.message) ||
+    /fetch failed|network|ECONNRESET|ETIMEDOUT/i.test(error.message)
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const MAX_RETRIES = 2;
+
 async function loadBase(symbol: string, interval: Timeframe, key: string): Promise<Candle[]> {
   const cacheKey = `td:base:${symbol}:${interval}`;
   const hit = cached<Candle[]>(cacheKey, BASE_TTL[interval] ?? 60_000);
   if (hit && hit.length) return hit;
 
+  const staleFallback = () => cache.get(cacheKey)?.value as Candle[] | undefined;
+
   if (isQuotaExhausted(Date.now())) {
-    const stale = cache.get(cacheKey)?.value as Candle[] | undefined;
+    const stale = staleFallback();
     if (stale?.length) return stale;
     throw new TwelveDataQuotaError(
       "daily credit quota exhausted — skipping request until UTC midnight",
+    );
+  }
+
+  if (!withinBudget(Date.now())) {
+    const stale = staleFallback();
+    if (stale?.length) return stale;
+    throw new TwelveDataBudgetError(
+      `local request budget (${creditsPerMinute()}/min) reached — skipping this cycle`,
     );
   }
 
@@ -233,21 +302,31 @@ async function loadBase(symbol: string, interval: Timeframe, key: string): Promi
     `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol(symbol))}` +
     `&interval=${TD_INTERVAL[interval]}&outputsize=${BASE_SIZE[interval] ?? 1500}` +
     `&timezone=UTC&format=JSON&apikey=${encodeURIComponent(key)}`;
-  try {
-    const raw = await getJson(url);
-    const status = (raw as { status?: string; message?: string }).status;
-    if (status === "error")
-      throw new Error((raw as { message?: string }).message ?? "provider error");
-    const candles = parseBars(raw, spec.digits, TF_MINUTES[interval] * 60_000);
-    if (candles.length < 30) throw new Error("not enough history returned");
-    store(cacheKey, candles);
-    return candles;
-  } catch (error) {
-    // Rate limits and outages must not wipe out prices we already fetched.
-    const stale = cache.get(cacheKey)?.value as Candle[] | undefined;
-    if (stale?.length) return stale;
-    throw error;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      recordRequest(Date.now());
+      const raw = await getJson(url);
+      const status = (raw as { status?: string; message?: string }).status;
+      if (status === "error")
+        throw new Error((raw as { message?: string }).message ?? "provider error");
+      const candles = parseBars(raw, spec.digits, TF_MINUTES[interval] * 60_000);
+      if (candles.length < 30) throw new Error("not enough history returned");
+      store(cacheKey, candles);
+      return candles;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryable(error) || attempt === MAX_RETRIES) break;
+      // Exponential backoff with jitter: 300ms, then 900ms, roughly.
+      await sleep(300 * 3 ** attempt + Math.random() * 200);
+    }
   }
+
+  // Rate limits and outages must not wipe out prices we already fetched.
+  const stale = staleFallback();
+  if (stale?.length) return stale;
+  throw lastError;
 }
 
 /** Candles per timeframe. Falls back to labelled sample data per timeframe. */
@@ -289,18 +368,33 @@ export async function loadSeries(symbol: string, timeframes: Timeframe[]): Promi
   }
 
   const syntheticTimeframes = new Set<Timeframe>();
+  const missingTimeframes: Timeframe[] = [];
+  const allowDemo = demoDataAllowed();
   for (const tf of timeframes) {
-    if (!series[tf]) {
+    if (series[tf]) continue;
+    if (allowDemo) {
       series[tf] = demoCandles(symbol, tf);
       syntheticTimeframes.add(tf);
+    } else {
+      missingTimeframes.push(tf);
     }
   }
 
   const real = realCount === timeframes.length && realCount > 0;
   if (!key)
-    notes.unshift("No TwelveData key configured — candles are sample data, not real prices.");
-  else if (!real)
+    notes.unshift(
+      allowDemo
+        ? "No TwelveData key configured — candles are sample data, not real prices."
+        : "No TwelveData key configured — no candles are available.",
+    );
+  else if (!real && syntheticTimeframes.size > 0)
     notes.unshift("Some timeframes fell back to sample data — do not trade those readings.");
+  if (missingTimeframes.length > 0) {
+    notes.unshift(
+      `${missingTimeframes.join(", ")}: no verified data available. Sample data is disabled ` +
+        `(set ALLOW_DEMO_DATA=true outside production to review the interface without a key).`,
+    );
+  }
 
   return {
     symbol: spec.symbol,
@@ -308,8 +402,12 @@ export async function loadSeries(symbol: string, timeframes: Timeframe[]): Promi
     provider: real
       ? "TwelveData"
       : key
-        ? "TwelveData + sample fallback"
-        : "Sample dataset (synthetic)",
+        ? syntheticTimeframes.size > 0
+          ? "TwelveData + sample fallback"
+          : "TwelveData (partial)"
+        : allowDemo
+          ? "Sample dataset (synthetic)"
+          : "No provider configured",
     real,
     notes,
     syntheticTimeframes,
@@ -375,19 +473,33 @@ export interface QuotesResult {
   notes: string[];
 }
 
+/**
+ * Cached per symbol, not per requested batch.
+ *
+ * The previous cache key joined the whole requested symbol list, so any
+ * change to the watchlist — reordering it, adding one pair, viewing a single
+ * chart instead of the full list — was a total cache miss even for symbols
+ * fetched moments ago, and a single cached symbol in one batch was never
+ * reusable from another. Worse, the old short-circuit skipped the TwelveData
+ * fetch for the *entire* batch the moment `found` was non-empty from cache,
+ * so one cache hit could suppress fresh data for every other symbol in the
+ * same call.
+ */
 export async function loadQuotes(symbols: string[]): Promise<QuotesResult> {
   const wanted = symbols.map((s) => s.toUpperCase());
   const notes: string[] = [];
   const found: Record<string, Quote> = {};
 
-  const cacheKey = `quotes:${wanted.join(",")}`;
-  const hit = cached<Record<string, Quote>>(cacheKey, 30_000);
-  if (hit) Object.assign(found, hit);
+  for (const symbol of wanted) {
+    const hit = cached<Quote>(`quote:${symbol}`, 30_000);
+    if (hit) found[symbol] = hit;
+  }
 
   const key = apiKey();
-  if (!Object.keys(found).length && key) {
+  const needsFetch = wanted.filter((s) => !found[s]);
+  if (key && needsFetch.length > 0) {
     const results = await Promise.all(
-      wanted.map(async (symbol) => {
+      needsFetch.map(async (symbol) => {
         try {
           return await twelveDataQuote(symbol, key);
         } catch (error) {
@@ -396,7 +508,12 @@ export async function loadQuotes(symbols: string[]): Promise<QuotesResult> {
         }
       }),
     );
-    for (const quote of results) if (quote) found[quote.symbol] = quote;
+    for (const quote of results) {
+      if (quote) {
+        found[quote.symbol] = quote;
+        store(`quote:${quote.symbol}`, quote);
+      }
+    }
   }
   if (!key)
     notes.push(
@@ -407,14 +524,20 @@ export async function loadQuotes(symbols: string[]): Promise<QuotesResult> {
     if (found[symbol]) continue;
     try {
       const fallback = await frankfurterQuote(symbol);
-      if (fallback) found[symbol] = fallback;
+      if (fallback) {
+        found[symbol] = fallback;
+        store(`quote:${symbol}`, fallback);
+      }
     } catch {
       // fall through to sample data
     }
   }
 
-  if (Object.keys(found).length) store(cacheKey, found);
-
+  // A quote is a single scalar used to anchor "current price" for display and
+  // for zone calculations — unlike the candle series, it never by itself
+  // produces a directional state, so it stays a labelled last-resort estimate
+  // here rather than an absent value. The engine's synthetic-data protection
+  // is keyed on syntheticTimeframes from loadSeries, which does hard-gate.
   const quotes = wanted.map((symbol) => {
     const real = found[symbol];
     if (real) return real;
