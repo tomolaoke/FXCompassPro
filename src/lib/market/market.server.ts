@@ -1,7 +1,7 @@
 import { specFor } from "./instruments";
 import { demoCandles, demoQuote } from "./demo";
 import { normalizeCandles } from "./data/normalize";
-import { DEFAULT_CLOCK_CONFIG, bucketStart as brokerBucketStart } from "./domain/clock";
+import { aggregate } from "./data/aggregate";
 import { TF_MINUTES, type Candle, type Quote, type Timeframe } from "./types";
 
 /**
@@ -212,36 +212,8 @@ function parseBars(raw: unknown, digits: number, expectedGapMs: number): Candle[
   return normalizeCandles(candles, expectedGapMs).candles;
 }
 
-/**
- * Rolls smaller candles up into a larger timeframe, bucketed on the broker's
- * server day rather than the UTC day.
- *
- * MetaTrader brokers do not start the day at midnight UTC. HF Markets, like
- * most, runs an EET/EEST server, so a plain `floor(t / msPerDay)` bucket puts
- * the daily close several hours away from the one traders actually see — and
- * silently misfiles the Sunday-evening market open into the wrong week. Using
- * the same broker-session-aware `bucketStart` the live engine reads candles
- * with is what makes the D1/H4/W1/MN series match the chart in the terminal.
- */
-function aggregate(base: Candle[], tf: Timeframe): Candle[] {
-  const out: Candle[] = [];
-  let current: Candle | null = null;
-  let currentKey = Number.NaN;
-  for (const c of base) {
-    const key = brokerBucketStart(c.t, tf, DEFAULT_CLOCK_CONFIG);
-    if (!current || key !== currentKey) {
-      if (current) out.push(current);
-      current = { t: key, o: c.o, h: c.h, l: c.l, c: c.c };
-      currentKey = key;
-      continue;
-    }
-    current.h = Math.max(current.h, c.h);
-    current.l = Math.min(current.l, c.l);
-    current.c = c.c;
-  }
-  if (current) out.push(current);
-  return out;
-}
+// aggregate() now lives in ./data/aggregate.ts, shared with the backtester so
+// live and replayed candles bucket identically.
 
 /**
  * One provider request per symbol, rolled up into every requested timeframe.

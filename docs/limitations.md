@@ -84,6 +84,18 @@ never.
   which is not available for free.
 - **Small sample sizes mean very little.** Sample size is displayed with every
   metric for that reason.
+- **The replay is not yet fast enough for a multi-year run.** Each bar re-slices
+  the full accumulated history and recomputes Stochastic over it from scratch —
+  O(n) work per bar, O(n²) over the whole run. A few months of M15 data runs in
+  seconds; several years will time out a typical serverless function before it
+  finishes. Windowed/incremental recomputation would fix this and is planned,
+  but has not been built yet — keep backtest ranges modest until it is.
+- **Position sizing is not wired into backtest costs.** Commission is expressed
+  directly in price units per side rather than account-currency per lot, because
+  a currency figure needs a lot size — which depends on account risk settings
+  and pip value, real position-sizing integration rather than a backtesting
+  concern. Net P/L and R-multiples are correct; an account-currency total is not
+  yet computed.
 
 ## Paper trading
 
