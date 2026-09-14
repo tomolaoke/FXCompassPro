@@ -67,13 +67,19 @@ function write(key: string, value: unknown) {
   window.dispatchEvent(new CustomEvent("cm-store", { detail: key }));
 }
 
-function useStoreValue<T>(key: string, loader: () => T): [T, (next: T) => void] {
-  const [value, setValue] = useState<T>(loader);
-  const [hydrated, setHydrated] = useState(false);
+/**
+ * Server and first client render always use `initial`, so the HTML matches.
+ * Stored values are applied after hydration.
+ */
+function useStoreValue<T>(
+  key: string,
+  loader: () => T,
+  initial: T,
+): [T, (next: T) => void] {
+  const [value, setValue] = useState<T>(initial);
 
   useEffect(() => {
     setValue(loader());
-    setHydrated(true);
     const onChange = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail;
       if (detail === key) setValue(loader());
@@ -91,13 +97,14 @@ function useStoreValue<T>(key: string, loader: () => T): [T, (next: T) => void] 
     [key],
   );
 
-  void hydrated;
   return [value, set];
 }
 
 export function useSettings() {
-  const [settings, setSettings] = useStoreValue<AppSettings>(KEYS.settings, () =>
-    read(KEYS.settings, DEFAULT_SETTINGS),
+  const [settings, setSettings] = useStoreValue<AppSettings>(
+    KEYS.settings,
+    () => read(KEYS.settings, DEFAULT_SETTINGS),
+    DEFAULT_SETTINGS,
   );
   const update = useCallback(
     (patch: Partial<AppSettings>) => setSettings({ ...settings, ...patch }),
@@ -112,8 +119,10 @@ export function useSettings() {
 }
 
 export function useJournal() {
-  const [entries, setEntries] = useStoreValue<JournalEntry[]>(KEYS.journal, () =>
-    readArray<JournalEntry>(KEYS.journal),
+  const [entries, setEntries] = useStoreValue<JournalEntry[]>(
+    KEYS.journal,
+    () => readArray<JournalEntry>(KEYS.journal),
+    [],
   );
   return {
     entries,
@@ -125,8 +134,10 @@ export function useJournal() {
 }
 
 export function useSignalRecords() {
-  const [records, setRecords] = useStoreValue<SignalRecord[]>(KEYS.records, () =>
-    readArray<SignalRecord>(KEYS.records),
+  const [records, setRecords] = useStoreValue<SignalRecord[]>(
+    KEYS.records,
+    () => readArray<SignalRecord>(KEYS.records),
+    [],
   );
   return {
     records,
@@ -139,8 +150,10 @@ export function useSignalRecords() {
 }
 
 export function useManualQuotes() {
-  const [quotes, setQuotes] = useStoreValue<Record<string, Quote>>(KEYS.quotes, () =>
-    read<Record<string, Quote>>(KEYS.quotes, {}),
+  const [quotes, setQuotes] = useStoreValue<Record<string, Quote>>(
+    KEYS.quotes,
+    () => read<Record<string, Quote>>(KEYS.quotes, {}),
+    {},
   );
   return {
     quotes,

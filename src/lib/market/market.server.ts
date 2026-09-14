@@ -135,21 +135,39 @@ function aggregate(base: Candle[], tf: Timeframe): Candle[] {
  * Free TwelveData plans allow only a handful of requests per minute, so we
  * never fire one call per timeframe.
  */
+/** Just enough bars to roll each base up into its largest timeframe. */
+const BASE_SIZE: Partial<Record<Timeframe, number>> = { M1: 400, M5: 1500, D1: 1200 };
+/** How long a base series stays fresh; longer timeframes move slowly. */
+const BASE_TTL: Partial<Record<Timeframe, number>> = {
+  M1: 45_000,
+  M5: 120_000,
+  D1: 3_600_000,
+};
+
 async function loadBase(symbol: string, interval: Timeframe, key: string): Promise<Candle[]> {
   const cacheKey = `td:base:${symbol}:${interval}`;
-  const hit = cached<Candle[]>(cacheKey, 60_000);
+  const hit = cached<Candle[]>(cacheKey, BASE_TTL[interval] ?? 60_000);
   if (hit && hit.length) return hit;
   const spec = specFor(symbol);
   const url =
     `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol(symbol))}` +
-    `&interval=${TD_INTERVAL[interval]}&outputsize=5000&format=JSON&apikey=${encodeURIComponent(key)}`;
-  const raw = await getJson(url);
-  const status = (raw as { status?: string; message?: string }).status;
-  if (status === "error") throw new Error((raw as { message?: string }).message ?? "provider error");
-  const candles = parseBars(raw, spec.digits);
-  if (candles.length < 30) throw new Error("not enough history returned");
-  store(cacheKey, candles);
-  return candles;
+    `&interval=${TD_INTERVAL[interval]}&outputsize=${BASE_SIZE[interval] ?? 1500}` +
+    `&format=JSON&apikey=${encodeURIComponent(key)}`;
+  try {
+    const raw = await getJson(url);
+    const status = (raw as { status?: string; message?: string }).status;
+    if (status === "error")
+      throw new Error((raw as { message?: string }).message ?? "provider error");
+    const candles = parseBars(raw, spec.digits);
+    if (candles.length < 30) throw new Error("not enough history returned");
+    store(cacheKey, candles);
+    return candles;
+  } catch (error) {
+    // Rate limits and outages must not wipe out prices we already fetched.
+    const stale = cache.get(cacheKey)?.value as Candle[] | undefined;
+    if (stale?.length) return stale;
+    throw error;
+  }
 }
 
 /** Candles per timeframe. Falls back to labelled sample data per timeframe. */
@@ -164,32 +182,26 @@ export async function loadSeries(
   let realCount = 0;
 
   if (key) {
-    const smallest = timeframes.reduce<Timeframe>(
-      (acc, tf) => (TF_MINUTES[tf] < TF_MINUTES[acc] ? tf : acc),
-      timeframes[0]!,
-    );
-    const needsDaily = timeframes.some((tf) => TF_MINUTES[tf] > TF_MINUTES.D1);
-    let intraday: Candle[] = [];
-    let daily: Candle[] = [];
+    // At most three provider requests per symbol cover all nine timeframes:
+    // M1 for the trigger, M5 for M5–H4, and D1 for D1–MN.
+    const needed = new Set<Timeframe>(timeframes.map(baseFor));
+    const bases: Partial<Record<Timeframe, Candle[]>> = {};
 
-    try {
-      intraday = await loadBase(symbol, smallest, key);
-    } catch (error) {
-      notes.push(`Intraday candles unavailable (${(error as Error).message}).`);
-    }
-    if (needsDaily) {
-      try {
-        daily = await loadBase(symbol, "D1", key);
-      } catch (error) {
-        notes.push(`Daily candles unavailable (${(error as Error).message}).`);
-      }
-    }
+    await Promise.all(
+      [...needed].map(async (base) => {
+        try {
+          bases[base] = await loadBase(symbol, base, key);
+        } catch (error) {
+          notes.push(`${base} candles unavailable (${(error as Error).message}).`);
+        }
+      }),
+    );
 
     for (const tf of timeframes) {
-      const isHigh = TF_MINUTES[tf] > TF_MINUTES.D1;
-      const source = isHigh ? daily : intraday;
-      if (!source.length) continue;
-      const rolled = tf === smallest && !isHigh ? source : aggregate(source, tf);
+      const base = baseFor(tf);
+      const source = bases[base];
+      if (!source?.length) continue;
+      const rolled = tf === base ? source : aggregate(source, tf);
       if (rolled.length < 30) {
         notes.push(`${tf}: not enough real history to read reliably.`);
         continue;
@@ -221,7 +233,7 @@ export async function loadSeries(
  * request, so a whole watchlist costs one provider call per symbol.
  */
 async function twelveDataQuote(symbol: string, key: string): Promise<Quote | null> {
-  const candles = await loadBase(symbol, "M15", key);
+  const candles = await loadBase(symbol, "M1", key);
   const last = candles[candles.length - 1];
   if (!last) return null;
   const spec = specFor(symbol);
@@ -233,11 +245,11 @@ async function twelveDataQuote(symbol: string, key: string): Promise<Quote | nul
     ask: Number((close + spread / 2).toFixed(spec.digits)),
     mid: Number(close.toFixed(spec.digits)),
     spread: Number(spread.toFixed(spec.digits + 1)),
-    timestamp: last.t + TF_MINUTES.M15 * 60_000,
+    timestamp: last.t + TF_MINUTES.M1 * 60_000,
     provider: "TwelveData",
     kind: "delayed",
-    quality: 82,
-    note: "Real market price from TwelveData (last completed 15-minute candle). Bid/ask are estimated from a typical spread, not your broker's book.",
+    quality: 85,
+    note: "Real market price from TwelveData (last completed 1-minute candle). Bid/ask are estimated from a typical spread, not your broker's book.",
   };
 }
 

@@ -72,8 +72,14 @@ export const getSignalRun = createServerFn({ method: "POST" })
     const { evaluateSignal } = await import("./signal");
 
     const quoteResult = await loadQuotes(data.symbols);
+    // The strategy reads all nine timeframes; three cached provider requests
+    // per symbol cover them, so this stays inside free-plan limits.
     const timeframes = Array.from(
-      new Set([...data.confirmationTimeframes, data.executionTimeframe]),
+      new Set<Timeframe>([
+        ...ALL_TIMEFRAMES,
+        ...data.confirmationTimeframes,
+        data.executionTimeframe,
+      ]),
     );
 
     // Symbols run in parallel: one provider request each, so a full watchlist
