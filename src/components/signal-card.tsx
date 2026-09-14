@@ -88,10 +88,7 @@ export function SignalCard({
             }
           />
           <Field label="Stop-loss" value={fmtPrice(signal.stopLoss, signal.symbol)} tone="bear" />
-          <Field
-            label="Invalidation"
-            value={fmtPrice(signal.invalidationLevel, signal.symbol)}
-          />
+          <Field label="Invalidation" value={fmtPrice(signal.invalidationLevel, signal.symbol)} />
           <Field
             label="TP1"
             value={`${fmtPrice(signal.takeProfit1, signal.symbol)}${signal.riskRewardRatios.tp1 ? ` · ${signal.riskRewardRatios.tp1}R` : ""}`}
@@ -146,8 +143,7 @@ export function SignalCard({
                             : "border-bear/50 bg-bear/10 text-bear"
                     }`}
                   >
-                    {ev.timeframe}{" "}
-                    {ev.stochasticK === null ? "—" : ev.stochasticK.toFixed(0)}
+                    {ev.timeframe} {ev.stochasticK === null ? "—" : ev.stochasticK.toFixed(0)}
                   </span>
                 ))}
               </div>
@@ -228,15 +224,7 @@ export function SignalCard({
   );
 }
 
-function Field({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "bull" | "bear";
-}) {
+function Field({ label, value, tone }: { label: string; value: string; tone?: "bull" | "bear" }) {
   return (
     <div className="rounded-md border border-border bg-card/60 px-2 py-1.5">
       <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</dt>

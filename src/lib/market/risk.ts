@@ -105,7 +105,9 @@ export function calculateRisk(input: RiskInput): RiskResult {
         price,
         rr: Number(rr.toFixed(2)),
         expectedGain: Number(
-          (suggestedLot * (Math.abs(price - input.entry) / spec.pipSize) * pipValuePerLot).toFixed(2),
+          (suggestedLot * (Math.abs(price - input.entry) / spec.pipSize) * pipValuePerLot).toFixed(
+            2,
+          ),
         ),
       };
     });

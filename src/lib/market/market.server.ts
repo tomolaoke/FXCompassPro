@@ -83,7 +83,9 @@ function parseBars(raw: unknown, digits: number): Candle[] {
   if (!Array.isArray(values)) return [];
   const candles = values
     .map((v) => {
-      const t = Date.parse(v.datetime.includes(" ") ? `${v.datetime.replace(" ", "T")}Z` : `${v.datetime}T00:00:00Z`);
+      const t = Date.parse(
+        v.datetime.includes(" ") ? `${v.datetime.replace(" ", "T")}Z` : `${v.datetime}T00:00:00Z`,
+      );
       return {
         t,
         o: Number(Number(v.open).toFixed(digits)),
@@ -171,10 +173,7 @@ async function loadBase(symbol: string, interval: Timeframe, key: string): Promi
 }
 
 /** Candles per timeframe. Falls back to labelled sample data per timeframe. */
-export async function loadSeries(
-  symbol: string,
-  timeframes: Timeframe[],
-): Promise<SeriesResult> {
+export async function loadSeries(symbol: string, timeframes: Timeframe[]): Promise<SeriesResult> {
   const spec = specFor(symbol);
   const key = apiKey();
   const series: Partial<Record<Timeframe, Candle[]>> = {};
@@ -216,13 +215,19 @@ export async function loadSeries(
   }
 
   const real = realCount === timeframes.length && realCount > 0;
-  if (!key) notes.unshift("No TwelveData key configured — candles are sample data, not real prices.");
-  else if (!real) notes.unshift("Some timeframes fell back to sample data — do not trade those readings.");
+  if (!key)
+    notes.unshift("No TwelveData key configured — candles are sample data, not real prices.");
+  else if (!real)
+    notes.unshift("Some timeframes fell back to sample data — do not trade those readings.");
 
   return {
     symbol: spec.symbol,
     series,
-    provider: real ? "TwelveData" : key ? "TwelveData + sample fallback" : "Sample dataset (synthetic)",
+    provider: real
+      ? "TwelveData"
+      : key
+        ? "TwelveData + sample fallback"
+        : "Sample dataset (synthetic)",
     real,
     notes,
   };
@@ -310,7 +315,10 @@ export async function loadQuotes(symbols: string[]): Promise<QuotesResult> {
     );
     for (const quote of results) if (quote) found[quote.symbol] = quote;
   }
-  if (!key) notes.push("No TwelveData key configured — using the free daily reference source where possible.");
+  if (!key)
+    notes.push(
+      "No TwelveData key configured — using the free daily reference source where possible.",
+    );
 
   for (const symbol of wanted) {
     if (found[symbol]) continue;

@@ -131,9 +131,7 @@ function RecordsScreen() {
                     <p className="font-display text-sm font-semibold tabular-nums text-bull">
                       {winRate(row.t)}
                     </p>
-                    <p className="text-[11px] tabular-nums text-muted-foreground">
-                      {avgR(row.t)}
-                    </p>
+                    <p className="text-[11px] tabular-nums text-muted-foreground">{avgR(row.t)}</p>
                   </div>
                 </div>
               ))}
@@ -144,8 +142,8 @@ function RecordsScreen() {
         <Panel title="Signal log">
           {records.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No signals logged yet. On the dashboard, tap “Log signal” on a setup card and it
-              will appear here with a “did I take this position?” checkbox.
+              No signals logged yet. On the dashboard, tap “Log signal” on a setup card and it will
+              appear here with a “did I take this position?” checkbox.
             </p>
           ) : (
             <ul className="space-y-3">
@@ -168,8 +166,8 @@ function RecordsScreen() {
                         </span>
                       </p>
                       <p className="text-[11px] text-muted-foreground">
-                        {new Date(r.createdAt).toLocaleString()} · {r.setupType} · score{" "}
-                        {r.score} · {r.session}
+                        {new Date(r.createdAt).toLocaleString()} · {r.setupType} · score {r.score} ·{" "}
+                        {r.session}
                         {r.dataKind === "demo" ? " · sample data" : ""}
                       </p>
                     </div>
@@ -261,15 +259,7 @@ function RecordsScreen() {
   );
 }
 
-function Stat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "bull";
-}) {
+function Stat({ label, value, tone }: { label: string; value: string; tone?: "bull" }) {
   return (
     <div className="rounded-md border border-border bg-card/60 py-2 text-center">
       <p

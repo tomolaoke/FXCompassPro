@@ -239,8 +239,7 @@ export function evaluateSignal(input: EvaluateInput): Signal {
     warnings.push(`${spec.symbol} has no verified specification — contract size unknown.`);
 
   const conflicting = bullVotes > 0 && bearVotes > 0;
-  if (conflicting)
-    warnings.push("Confirmation timeframes disagree: some are stretched each way.");
+  if (conflicting) warnings.push("Confirmation timeframes disagree: some are stretched each way.");
 
   // --- direction candidate ----------------------------------------------
   const needed = Math.max(2, Math.ceil(available / 2));
@@ -416,7 +415,9 @@ export function evaluateSignal(input: EvaluateInput): Signal {
       shift.detected && (isBuy ? shift.direction === "BULLISH" : shift.direction === "BEARISH");
     if (shiftAligned) {
       score += 10;
-      reasons.push(`${isBuy ? "Bullish" : "Bearish"} market-structure shift confirmed on ${execTf}.`);
+      reasons.push(
+        `${isBuy ? "Bullish" : "Bearish"} market-structure shift confirmed on ${execTf}.`,
+      );
     }
     if (lastDisplacement) {
       score += 5;

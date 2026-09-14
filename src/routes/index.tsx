@@ -68,9 +68,7 @@ function Dashboard() {
         </Panel>
 
         {isLoading && (
-          <p className="py-10 text-center text-sm text-muted-foreground">
-            Reading the market…
-          </p>
+          <p className="py-10 text-center text-sm text-muted-foreground">Reading the market…</p>
         )}
         {isError && (
           <Panel title="Could not read prices">
@@ -114,15 +112,7 @@ function Dashboard() {
   );
 }
 
-function Stat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone?: "bull" | "warn";
-}) {
+function Stat({ label, value, tone }: { label: string; value: number; tone?: "bull" | "warn" }) {
   return (
     <div className="rounded-md border border-border bg-card/60 py-2">
       <p

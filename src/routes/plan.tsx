@@ -74,7 +74,6 @@ function PlanPage() {
       settings: settings.risk,
       pipValuePerLotOverride: num(pipValue),
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry, stop, tp1, tp2, tp3, pipValue, symbol, settings.risk]);
 
   const currency = settings.risk.accountCurrency;
@@ -141,11 +140,46 @@ function PlanPage() {
 
         <Panel title="Levels">
           <div className="grid grid-cols-2 gap-3">
-            <TextField label="Entry" value={entry} onChange={(v) => { setTouched(true); setEntry(v); }} />
-            <TextField label="Stop-loss" value={stop} onChange={(v) => { setTouched(true); setStop(v); }} />
-            <TextField label="Take profit 1" value={tp1} onChange={(v) => { setTouched(true); setTp1(v); }} />
-            <TextField label="Take profit 2" value={tp2} onChange={(v) => { setTouched(true); setTp2(v); }} />
-            <TextField label="Take profit 3" value={tp3} onChange={(v) => { setTouched(true); setTp3(v); }} />
+            <TextField
+              label="Entry"
+              value={entry}
+              onChange={(v) => {
+                setTouched(true);
+                setEntry(v);
+              }}
+            />
+            <TextField
+              label="Stop-loss"
+              value={stop}
+              onChange={(v) => {
+                setTouched(true);
+                setStop(v);
+              }}
+            />
+            <TextField
+              label="Take profit 1"
+              value={tp1}
+              onChange={(v) => {
+                setTouched(true);
+                setTp1(v);
+              }}
+            />
+            <TextField
+              label="Take profit 2"
+              value={tp2}
+              onChange={(v) => {
+                setTouched(true);
+                setTp2(v);
+              }}
+            />
+            <TextField
+              label="Take profit 3"
+              value={tp3}
+              onChange={(v) => {
+                setTouched(true);
+                setTp3(v);
+              }}
+            />
             <TextField
               label={`Value per pip at 1 lot (${currency})`}
               value={pipValue}
@@ -164,10 +198,7 @@ function PlanPage() {
             ) : (
               <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
                 <Cell label="Lot size" value={String(result.suggestedLot ?? "—")} tone="bull" />
-                <Cell
-                  label="Risk budget"
-                  value={`${currency} ${result.riskAmount.toFixed(2)}`}
-                />
+                <Cell label="Risk budget" value={`${currency} ${result.riskAmount.toFixed(2)}`} />
                 <Cell label="Stop distance" value={`${result.stopPips.toFixed(1)} pips`} />
                 <Cell
                   label="Loss if stopped"
@@ -297,15 +328,7 @@ function TextField({
   );
 }
 
-function Cell({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "bull" | "bear";
-}) {
+function Cell({ label, value, tone }: { label: string; value: string; tone?: "bull" | "bear" }) {
   return (
     <div className="rounded-md border border-border bg-card/60 px-2 py-2">
       <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>

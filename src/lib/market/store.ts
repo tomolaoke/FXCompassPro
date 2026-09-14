@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { DEFAULT_WATCHLIST } from "./instruments";
-import type {
-  AppSettings,
-  JournalEntry,
-  Quote,
-  SignalRecord,
-  Timeframe,
-} from "./types";
+import type { AppSettings, JournalEntry, Quote, SignalRecord, Timeframe } from "./types";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   risk: {
@@ -71,11 +65,7 @@ function write(key: string, value: unknown) {
  * Server and first client render always use `initial`, so the HTML matches.
  * Stored values are applied after hydration.
  */
-function useStoreValue<T>(
-  key: string,
-  loader: () => T,
-  initial: T,
-): [T, (next: T) => void] {
+function useStoreValue<T>(key: string, loader: () => T, initial: T): [T, (next: T) => void] {
   const [value, setValue] = useState<T>(initial);
 
   useEffect(() => {

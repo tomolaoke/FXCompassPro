@@ -15,9 +15,8 @@ export const Route = createFileRoute("/api/public/feed")({
           .filter((s) => /^[A-Z]{3,12}$/.test(s))
           .slice(0, 8);
 
-        const { subscribe, recentEvents, publishEvent } = await import(
-          "@/lib/market/events.server"
-        );
+        const { subscribe, recentEvents, publishEvent } =
+          await import("@/lib/market/events.server");
         const { loadQuotes } = await import("@/lib/market/market.server");
 
         const encoder = new TextEncoder();

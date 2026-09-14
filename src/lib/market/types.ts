@@ -1,16 +1,6 @@
 export type Timeframe = "MN" | "W1" | "D1" | "H4" | "H1" | "M30" | "M15" | "M5" | "M1";
 
-export const ALL_TIMEFRAMES: Timeframe[] = [
-  "MN",
-  "W1",
-  "D1",
-  "H4",
-  "H1",
-  "M30",
-  "M15",
-  "M5",
-  "M1",
-];
+export const ALL_TIMEFRAMES: Timeframe[] = ["MN", "W1", "D1", "H4", "H1", "M30", "M15", "M5", "M1"];
 
 /** MN / W1 give broad context only and can never block a signal. */
 export const CONTEXT_TIMEFRAMES: Timeframe[] = ["MN", "W1"];
@@ -93,12 +83,7 @@ export type SignalState =
   | "EXPIRED";
 
 export type StochZone = "OVERSOLD" | "OVERBOUGHT" | "NEUTRAL";
-export type StochBehaviour =
-  | "EXTREME"
-  | "CURVING"
-  | "CROSSED"
-  | "CONFIRMED"
-  | "NO_CONFIRMATION";
+export type StochBehaviour = "EXTREME" | "CURVING" | "CROSSED" | "CONFIRMED" | "NO_CONFIRMATION";
 export type BiasDirection = "BULLISH" | "BEARISH" | "NEUTRAL";
 export type DataStatus = "VALID" | "STALE" | "UNAVAILABLE";
 /** How MN / W1 context was treated for this reading. */

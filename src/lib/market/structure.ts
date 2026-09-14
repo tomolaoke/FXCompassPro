@@ -77,9 +77,7 @@ export function equalLevels(candles: Candle[], tolerance: number): EqualLevels[]
   const sw = swings(candles, 2);
   const groups: EqualLevels[] = [];
   for (const s of sw) {
-    const hit = groups.find(
-      (g) => g.type === s.type && Math.abs(g.price - s.price) <= tolerance,
-    );
+    const hit = groups.find((g) => g.type === s.type && Math.abs(g.price - s.price) <= tolerance);
     if (hit) {
       hit.count += 1;
       hit.price = (hit.price * (hit.count - 1) + s.price) / hit.count;

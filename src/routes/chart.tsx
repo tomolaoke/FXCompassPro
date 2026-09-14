@@ -43,7 +43,8 @@ function ChartPage() {
 
   const overlays: ChartOverlay[] = [];
   if (signal) {
-    if (signal.stopLoss !== null) overlays.push({ label: "SL", price: signal.stopLoss, tone: "bear" });
+    if (signal.stopLoss !== null)
+      overlays.push({ label: "SL", price: signal.stopLoss, tone: "bear" });
     if (signal.takeProfit1 !== null)
       overlays.push({ label: "TP1", price: signal.takeProfit1, tone: "bull" });
     if (signal.takeProfit2 !== null)

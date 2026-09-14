@@ -77,14 +77,23 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "FX Compass Pro — educational multi-timeframe market analysis" },
+      {
+        name: "description",
+        content:
+          "Multi-timeframe forex and gold analysis that shows short-term direction and higher-timeframe bias separately, and never hides when they disagree. Educational only — no signal is guaranteed.",
+      },
+      {
+        property: "og:title",
+        content: "FX Compass Pro — educational multi-timeframe market analysis",
+      },
+      {
+        property: "og:description",
+        content:
+          "Short-term direction and higher-timeframe bias, shown separately. Conflicts are labelled, never hidden. Educational only.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
       {

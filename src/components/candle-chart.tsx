@@ -36,9 +36,7 @@ export function CandleChart({
   );
 
   if (!view.length) {
-    return (
-      <p className="py-10 text-center text-sm text-muted-foreground">No candles available.</p>
-    );
+    return <p className="py-10 text-center text-sm text-muted-foreground">No candles available.</p>;
   }
 
   const W = 720;
@@ -72,15 +70,7 @@ export function CandleChart({
     <div className="space-y-2">
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`${symbol} candles`}>
         {[0.25, 0.5, 0.75].map((f) => (
-          <line
-            key={f}
-            x1={0}
-            x2={W}
-            y1={H * f}
-            y2={H * f}
-            stroke="var(--grid)"
-            strokeWidth={1}
-          />
+          <line key={f} x1={0} x2={W} y1={H * f} y2={H * f} stroke="var(--grid)" strokeWidth={1} />
         ))}
         {zone && (
           <rect

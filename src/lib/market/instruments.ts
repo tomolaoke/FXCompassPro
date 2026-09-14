@@ -63,14 +63,7 @@ export const INSTRUMENTS: Record<string, InstrumentSpec> = {
   },
 };
 
-export const DEFAULT_WATCHLIST = [
-  "XAUUSD",
-  "EURJPY",
-  "USDJPY",
-  "EURUSD",
-  "GBPUSD",
-  "AUDUSD",
-];
+export const DEFAULT_WATCHLIST = ["XAUUSD", "EURJPY", "USDJPY", "EURUSD", "GBPUSD", "AUDUSD"];
 
 export function specFor(symbol: string): InstrumentSpec {
   const known = INSTRUMENTS[symbol.toUpperCase()];

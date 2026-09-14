@@ -22,9 +22,7 @@ export const getQuotes = createServerFn({ method: "POST" })
 
 export const getSeries = createServerFn({ method: "POST" })
   .inputValidator((input: { symbol: string; timeframes: Timeframe[] }) =>
-    z
-      .object({ symbol: symbolSchema, timeframes: z.array(tfSchema).min(1).max(8) })
-      .parse(input),
+    z.object({ symbol: symbolSchema, timeframes: z.array(tfSchema).min(1).max(8) }).parse(input),
   )
   .handler(async ({ data }) => {
     const { loadSeries } = await import("./market.server");
