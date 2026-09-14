@@ -9,8 +9,16 @@ const STATE_TONE: Record<string, string> = {
   WAIT: "border-border bg-card text-muted-foreground",
   MISSED: "border-bear/50 bg-bear/10 text-bear",
   INVALIDATED: "border-bear/50 bg-bear/10 text-bear",
+  INVALID: "border-bear/50 bg-bear/10 text-bear",
+  INSUFFICIENT_DATA: "border-border bg-card text-muted-foreground",
   TRIGGERED: "border-primary/50 bg-primary/10 text-primary",
   EXPIRED: "border-border bg-card text-muted-foreground",
+};
+
+const STATE_LABEL: Record<string, string> = {
+  MISSED: "Missed — do not chase",
+  INSUFFICIENT_DATA: "Not enough data",
+  INVALID: "Invalid — do not trade",
 };
 
 export function SignalCard({
@@ -96,21 +104,65 @@ export function SignalCard({
         </dl>
       )}
 
-      <div className="flex flex-wrap gap-1">
-        {signal.timeframeEvidence.map((ev) => (
-          <span
-            key={`${ev.timeframe}-${ev.note}`}
-            title={`${ev.stochState} · K ${ev.k?.toFixed(1) ?? "—"} / D ${ev.d?.toFixed(1) ?? "—"} — ${ev.note}`}
-            className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
-              ev.aligned
-                ? "border-bull/50 bg-bull/10 text-bull"
-                : "border-border bg-card text-muted-foreground"
-            }`}
-          >
-            {ev.timeframe} {ev.k === null ? "—" : ev.k.toFixed(0)}
-          </span>
-        ))}
+      {signal.calculationErrors.length > 0 && (
+        <ul className="space-y-1 rounded-md border border-bear/50 bg-bear/10 p-2 text-[11px] text-bear">
+          {signal.calculationErrors.map((e) => (
+            <li key={e}>× {e}</li>
+          ))}
+        </ul>
+      )}
+
+      <div className="space-y-2">
+        {(["CONTEXT", "CONFIRMATION", "ENTRY"] as const).map((role) => {
+          const group = signal.timeframeEvidence.filter((ev) => ev.role === role);
+          if (group.length === 0) return null;
+          return (
+            <div key={role} className="space-y-1">
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                {role === "CONTEXT"
+                  ? "Big picture (never blocks)"
+                  : role === "CONFIRMATION"
+                    ? "Direction & confirmation"
+                    : "Timing"}
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {group.map((ev) => (
+                  <span
+                    key={ev.timeframe}
+                    title={`${ev.zone} · ${ev.state}${ev.crossLevel ? ` through ${ev.crossLevel}` : ""} · K ${ev.stochasticK?.toFixed(1) ?? "—"} / D ${ev.stochasticD?.toFixed(1) ?? "—"} · ${ev.dataStatus}${ev.used ? "" : " · not used"} — ${ev.explanation}`}
+                    className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
+                      ev.dataStatus !== "VALID"
+                        ? "border-border bg-card text-muted-foreground opacity-60"
+                        : ev.aligned
+                          ? "border-bull/50 bg-bull/10 text-bull"
+                          : ev.direction === "NEUTRAL"
+                            ? "border-border bg-card text-muted-foreground"
+                            : "border-bear/50 bg-bear/10 text-bear"
+                    }`}
+                  >
+                    {ev.timeframe}{" "}
+                    {ev.stochasticK === null ? "—" : ev.stochasticK.toFixed(0)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </div>
+
+      <p className="text-[11px] text-muted-foreground">
+        Monthly {signal.higherContext.monthly.replace(/_/g, " ").toLowerCase()} (
+        {signal.higherContext.monthlyDirection.toLowerCase()}) · weekly{" "}
+        {signal.higherContext.weekly.replace(/_/g, " ").toLowerCase()} (
+        {signal.higherContext.weeklyDirection.toLowerCase()}) ·{" "}
+        {signal.higherContext.used ? "used" : "not used"}
+        {signal.higherContext.conflict ? " · conflicts with this reading" : ""}
+      </p>
+      {signal.higherContext.allowedDespiteConflict && (
+        <p className="text-[11px] text-warn">
+          Allowed anyway: {signal.higherContext.allowedDespiteConflict}
+        </p>
+      )}
 
       <details className="text-xs">
         <summary className="cursor-pointer text-muted-foreground">
