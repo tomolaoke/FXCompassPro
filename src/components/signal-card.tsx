@@ -1,25 +1,43 @@
 import { Link } from "@tanstack/react-router";
 import { DataBadge } from "@/components/app-shell";
+import { ROLE_LABEL } from "@/lib/market/config/timeframes";
+import {
+  allowsDirectionalBadge,
+  requiresCountertrendWarning,
+  TIMEFRAME_STATE_LABEL,
+} from "@/lib/market/domain/states";
 import { fmtPrice } from "@/lib/market/instruments";
-import type { Quote, Signal } from "@/lib/market/types";
+import type { EngineSignal, TimeframeReading } from "@/lib/market/engine/types";
+import type { Quote } from "@/lib/market/types";
 
-const STATE_TONE: Record<string, string> = {
-  READY: "border-bull/50 bg-bull/10 text-bull",
-  WATCH: "border-warn/50 bg-warn/10 text-warn",
-  WAIT: "border-border bg-card text-muted-foreground",
-  MISSED: "border-bear/50 bg-bear/10 text-bear",
-  INVALIDATED: "border-bear/50 bg-bear/10 text-bear",
-  INVALID: "border-bear/50 bg-bear/10 text-bear",
-  INSUFFICIENT_DATA: "border-border bg-card text-muted-foreground",
-  TRIGGERED: "border-primary/50 bg-primary/10 text-primary",
-  EXPIRED: "border-border bg-card text-muted-foreground",
-};
+/**
+ * Renders an EngineSignal — never a bare direction. The badge tone is driven
+ * by `allowsDirectionalBadge(label)`, which is only true for a READY label, so
+ * a developing or conflicted setup can never render green or red.
+ */
+function labelTone(label: EngineSignal["label"], direction: EngineSignal["direction"]): string {
+  if (!allowsDirectionalBadge(label)) {
+    if (label === "INSUFFICIENT DATA" || label === "WAIT — NO VALID SETUP") {
+      return "border-border bg-card text-muted-foreground";
+    }
+    if (label === "INVALID" || label === "DATA QUALITY ERROR" || label === "EXPIRED") {
+      return "border-bear/50 bg-bear/10 text-bear";
+    }
+    return "border-warn/50 bg-warn/10 text-warn"; // WATCH / SETUP — developing
+  }
+  if (requiresCountertrendWarning(label)) return "border-warn/50 bg-warn/10 text-warn";
+  return direction === "BUY"
+    ? "border-bull/50 bg-bull/10 text-bull"
+    : "border-bear/50 bg-bear/10 text-bear";
+}
 
-const STATE_LABEL: Record<string, string> = {
-  MISSED: "Missed — do not chase",
-  INSUFFICIENT_DATA: "Not enough data",
-  INVALID: "Invalid — do not trade",
-};
+const ROLE_ORDER = [
+  "BROAD_CONTEXT",
+  "PRIMARY_CONTEXT",
+  "OPERATIONAL",
+  "ENTRY_CONFIRMATION",
+  "EXECUTION_TRIGGER",
+] as const;
 
 export function SignalCard({
   signal,
@@ -27,57 +45,69 @@ export function SignalCard({
   onLog,
   logged,
 }: {
-  signal: Signal;
+  signal: EngineSignal;
   quote: Quote;
   onLog?: () => void;
   logged?: boolean;
 }) {
-  const dirTone =
-    signal.direction === "BUY"
-      ? "text-bull"
-      : signal.direction === "SELL"
-        ? "text-bear"
-        : "text-muted-foreground";
-
-  const tradable =
-    signal.direction !== "WAIT" &&
-    signal.calculationErrors.length === 0 &&
-    signal.state !== "INVALID" &&
-    signal.state !== "INSUFFICIENT_DATA";
+  const tradable = signal.readiness === "READY" && signal.calculationErrors.length === 0;
 
   return (
     <section className="panel space-y-3 p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="font-display text-lg font-semibold tracking-tight">{signal.symbol}</p>
-          <p className="text-xs text-muted-foreground">{signal.setupType}</p>
+          <p className="text-xs text-muted-foreground">
+            Setup quality {signal.score.value}/{signal.score.max} · {signal.score.label}
+            <span className="ml-1 text-[10px]">(heuristic, not a win probability)</span>
+          </p>
         </div>
         <div className="flex flex-col items-end gap-1">
           <span
-            className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
-              STATE_TONE[signal.state] ?? STATE_TONE["WAIT"]
-            }`}
+            className={`rounded-md border px-2 py-0.5 text-right text-[11px] font-semibold uppercase tracking-wide ${labelTone(signal.label, signal.direction)}`}
           >
-            {STATE_LABEL[signal.state] ?? signal.state}
+            {signal.label}
           </span>
           <DataBadge quote={quote} />
         </div>
       </div>
 
-      <div className="flex items-baseline gap-3">
-        <span className={`font-display text-2xl font-semibold tabular-nums ${dirTone}`}>
-          {signal.direction}
-        </span>
-        <span className="text-sm tabular-nums text-muted-foreground">
-          price {fmtPrice(quote.mid, signal.symbol)}
-        </span>
-        <span className="ml-auto text-xs text-muted-foreground">
-          setup quality {signal.confidenceScore}/100 · {signal.confidenceLabel}
-          <span className="block text-[10px]">not a win probability</span>
-        </span>
+      <p className="text-sm tabular-nums text-muted-foreground">
+        price {fmtPrice(quote.mid, signal.symbol)}
+      </p>
+
+      {/* short-term vs higher-timeframe, always shown separately */}
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <div className="rounded-md border border-border bg-card/60 px-2 py-1.5">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Short-term direction
+          </p>
+          <p className="font-medium">
+            {signal.shortTermDirection.replace(/_/g, " ").toLowerCase()}
+          </p>
+        </div>
+        <div className="rounded-md border border-border bg-card/60 px-2 py-1.5">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Higher-timeframe bias
+          </p>
+          <p className="font-medium">
+            {signal.higherTimeframeBias.replace(/_/g, " ").toLowerCase()}
+          </p>
+        </div>
       </div>
 
-      {signal.direction !== "WAIT" && (
+      {signal.notFullyAlignedReason && (
+        <p className="rounded-md border border-warn/40 bg-warn/10 p-2 text-[11px] text-warn">
+          {signal.notFullyAlignedReason}
+        </p>
+      )}
+      {signal.countertrendBlocked && signal.countertrendBlockReason && (
+        <p className="rounded-md border border-bear/40 bg-bear/10 p-2 text-[11px] text-bear">
+          Countertrend blocked: {signal.countertrendBlockReason}
+        </p>
+      )}
+
+      {tradable && (
         <dl className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
           <Field
             label="Entry zone"
@@ -115,36 +145,19 @@ export function SignalCard({
         </ul>
       )}
 
+      {/* all nine timeframes, grouped by role tier, never hidden */}
       <div className="space-y-2">
-        {(["CONTEXT", "CONFIRMATION", "ENTRY"] as const).map((role) => {
-          const group = signal.timeframeEvidence.filter((ev) => ev.role === role);
+        {ROLE_ORDER.map((role) => {
+          const group = signal.timeframes.filter((t) => t.role === role);
           if (group.length === 0) return null;
           return (
             <div key={role} className="space-y-1">
               <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                {role === "CONTEXT"
-                  ? "Big picture (never blocks)"
-                  : role === "CONFIRMATION"
-                    ? "Direction & confirmation"
-                    : "Timing"}
+                {ROLE_LABEL[role]}
               </p>
               <div className="flex flex-wrap gap-1">
-                {group.map((ev) => (
-                  <span
-                    key={ev.timeframe}
-                    title={`${ev.zone} · ${ev.state}${ev.crossLevel ? ` through ${ev.crossLevel}` : ""} · K ${ev.stochasticK?.toFixed(1) ?? "—"} / D ${ev.stochasticD?.toFixed(1) ?? "—"} · ${ev.dataStatus}${ev.used ? "" : " · not used"} — ${ev.explanation}`}
-                    className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
-                      ev.dataStatus !== "VALID"
-                        ? "border-border bg-card text-muted-foreground opacity-60"
-                        : ev.aligned
-                          ? "border-bull/50 bg-bull/10 text-bull"
-                          : ev.direction === "NEUTRAL"
-                            ? "border-border bg-card text-muted-foreground"
-                            : "border-bear/50 bg-bear/10 text-bear"
-                    }`}
-                  >
-                    {ev.timeframe} {ev.stochasticK === null ? "—" : ev.stochasticK.toFixed(0)}
-                  </span>
+                {group.map((tf) => (
+                  <TimeframeChip key={tf.timeframe} reading={tf} />
                 ))}
               </div>
             </div>
@@ -152,24 +165,8 @@ export function SignalCard({
         })}
       </div>
 
-      <p className="text-[11px] text-muted-foreground">
-        Monthly {signal.higherContext.monthly.replace(/_/g, " ").toLowerCase()} (
-        {signal.higherContext.monthlyDirection.toLowerCase()}) · weekly{" "}
-        {signal.higherContext.weekly.replace(/_/g, " ").toLowerCase()} (
-        {signal.higherContext.weeklyDirection.toLowerCase()}) ·{" "}
-        {signal.higherContext.used ? "used" : "not used"}
-        {signal.higherContext.conflict ? " · conflicts with this reading" : ""}
-      </p>
-      {signal.higherContext.allowedDespiteConflict && (
-        <p className="text-[11px] text-warn">
-          Allowed anyway: {signal.higherContext.allowedDespiteConflict}
-        </p>
-      )}
-
       <details className="text-xs">
-        <summary className="cursor-pointer text-muted-foreground">
-          Why this reading, and why it may fail
-        </summary>
+        <summary className="cursor-pointer text-muted-foreground">Why this signal?</summary>
         <ul className="mt-2 space-y-1 text-muted-foreground">
           {signal.reasons.map((r) => (
             <li key={r}>• {r}</li>
@@ -182,14 +179,12 @@ export function SignalCard({
             ))}
           </ul>
         )}
-        <ul className="mt-2 space-y-1 text-muted-foreground">
-          {signal.whyItMayFail.map((w) => (
-            <li key={w}>× {w}</li>
-          ))}
-        </ul>
         <p className="mt-2 text-muted-foreground">Trigger: {signal.triggerCondition}</p>
         <p className="text-muted-foreground">Invalidation: {signal.invalidationCondition}</p>
         <p className="text-muted-foreground">Session: {signal.session.replace(/_/g, " ")}</p>
+        <p className="mt-2 text-[10px] text-muted-foreground">
+          Strategy version: {signal.strategyVersion}
+        </p>
       </details>
 
       <div className="flex flex-wrap gap-2">
@@ -221,6 +216,36 @@ export function SignalCard({
         )}
       </div>
     </section>
+  );
+}
+
+function TimeframeChip({ reading }: { reading: TimeframeReading }) {
+  const stateLabel = TIMEFRAME_STATE_LABEL[reading.state];
+  const tone =
+    reading.relation === "AGREEING"
+      ? "border-bull/50 bg-bull/10 text-bull"
+      : reading.relation === "CONFLICTING"
+        ? "border-bear/50 bg-bear/10 text-bear"
+        : "border-border bg-card text-muted-foreground";
+  const k = reading.stochastic?.k;
+  const title = [
+    stateLabel,
+    reading.relation !== "NOT_APPLICABLE" ? reading.relation.toLowerCase() : null,
+    reading.isSynthetic ? "sample data — not real" : null,
+    k !== null && k !== undefined ? `K ${k.toFixed(1)}` : null,
+    reading.explanation,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <span
+      className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${tone} ${reading.isSynthetic ? "opacity-60" : ""}`}
+      title={title}
+      aria-label={`${reading.timeframe}: ${stateLabel}${reading.relation === "CONFLICTING" ? " (conflicting)" : ""}`}
+    >
+      {reading.timeframe} {k === null || k === undefined ? "—" : k.toFixed(0)}
+    </span>
   );
 }
 

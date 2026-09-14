@@ -24,9 +24,15 @@ dist-ssr
 .vscode/*
 !.vscode/extensions.json
 .idea
+.history/
 .DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets
+.env
+.env.local
+.env.*.local

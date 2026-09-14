@@ -2,10 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { AppShell, DataBadge, Panel } from "@/components/app-shell";
 import { CandleChart, type ChartOverlay } from "@/components/candle-chart";
-import { useSeries, useSignalRun } from "@/lib/market/hooks";
+import { ALL_TIMEFRAMES, type Timeframe } from "@/lib/market/config/timeframes";
+import { useEngineSignalRun, useSeries } from "@/lib/market/hooks";
 import { fmtPrice } from "@/lib/market/instruments";
 import { useSettings } from "@/lib/market/store";
-import { ALL_TIMEFRAMES, type Timeframe } from "@/lib/market/types";
+import type { Timeframe as LegacyTimeframe } from "@/lib/market/types";
 
 export const Route = createFileRoute("/chart")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -13,13 +14,13 @@ export const Route = createFileRoute("/chart")({
   }),
   head: () => ({
     meta: [
-      { title: "Chart & Stochastic 25,2,4 — Caveman Markets" },
+      { title: "Chart & Stochastic 25,2,4 — FX Compass Pro" },
       {
         name: "description",
         content:
           "Candlestick chart with Stochastic 25,2,4, entry zone, stop-loss and target overlays for gold and major FX pairs. Educational only.",
       },
-      { property: "og:title", content: "Chart & Stochastic 25,2,4 — Caveman Markets" },
+      { property: "og:title", content: "Chart & Stochastic 25,2,4 — FX Compass Pro" },
       {
         property: "og:description",
         content: "Candles, Stochastic 25,2,4 and level overlays for study, not advice.",
@@ -33,13 +34,15 @@ function ChartPage() {
   const { symbol: fromSearch } = Route.useSearch();
   const { settings } = useSettings();
   const [symbol, setSymbol] = useState(fromSearch ?? settings.watchlist[0] ?? "XAUUSD");
-  const [timeframe, setTimeframe] = useState<Timeframe>(settings.executionTimeframe);
+  const [timeframe, setTimeframe] = useState<Timeframe>("M15");
 
-  const series = useSeries(symbol, [timeframe]);
-  const run = useSignalRun(settings, [symbol]);
+  // useSeries still speaks the old Timeframe type; the two are the same nine
+  // string literals, just declared in two modules during the migration.
+  const series = useSeries(symbol, [timeframe as unknown as LegacyTimeframe]);
+  const run = useEngineSignalRun(settings, [symbol]);
   const row = run.data?.rows[0];
   const signal = row?.signal;
-  const candles = series.data?.series?.[timeframe] ?? [];
+  const candles = series.data?.series?.[timeframe as unknown as LegacyTimeframe] ?? [];
 
   const overlays: ChartOverlay[] = [];
   if (signal) {
@@ -106,7 +109,7 @@ function ChartPage() {
               candles={candles}
               symbol={symbol}
               overlays={overlays}
-              zone={signal?.entryZone ?? null}
+              zone={signal?.entryZone ? [...signal.entryZone] : null}
             />
           )}
         </Panel>
@@ -115,8 +118,7 @@ function ChartPage() {
           <Panel title="Levels on this chart">
             <ul className="space-y-1 text-xs text-muted-foreground">
               <li>
-                Direction: <span className="text-foreground">{signal.direction}</span> ·{" "}
-                {signal.state}
+                Label: <span className="text-foreground">{signal.label}</span>
               </li>
               <li>
                 Entry zone:{" "}

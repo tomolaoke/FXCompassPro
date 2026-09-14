@@ -1,37 +1,43 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell, Panel } from "@/components/app-shell";
 import { SignalCard } from "@/components/signal-card";
-import { useSignalRun } from "@/lib/market/hooks";
+import { useEngineSignalRun } from "@/lib/market/hooks";
 import { newId, useSettings, useSignalRecords } from "@/lib/market/store";
+import type { Session } from "@/lib/market/types";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Caveman Markets — Daily forex & gold study dashboard" },
+      { title: "FX Compass Pro — daily forex & gold study dashboard" },
       {
         name: "description",
         content:
-          "Educational multi-timeframe Stochastic 25,2,4 analysis for gold and major FX pairs, with entry zones, stops, targets and honest data labelling.",
+          "Educational multi-timeframe Stochastic 25,2,4 analysis for gold and major FX pairs. Short-term direction and higher-timeframe bias are shown separately, and never hidden when they disagree.",
       },
-      { property: "og:title", content: "Caveman Markets — Daily forex & gold study dashboard" },
+      { property: "og:title", content: "FX Compass Pro — daily forex & gold study dashboard" },
       {
         property: "og:description",
         content:
-          "Educational multi-timeframe analysis with entry zones, stops and targets. No signal is guaranteed.",
+          "Multi-timeframe analysis with entry zones, stops and targets. Conflicts are labelled, never hidden. No signal is guaranteed.",
       },
     ],
   }),
   component: Dashboard,
 });
 
+/** The engine's CLOSED session has no old-store equivalent; OFF_HOURS is the closest fit for the record. */
+function toRecordSession(session: string): Session {
+  return session === "CLOSED" ? "OFF_HOURS" : (session as Session);
+}
+
 function Dashboard() {
   const { settings } = useSettings();
   const { records, add } = useSignalRecords();
-  const { data, isLoading, isError, refetch, isFetching } = useSignalRun(settings);
+  const { data, isLoading, isError, refetch, isFetching } = useEngineSignalRun(settings);
 
   const rows = data?.rows ?? [];
-  const ready = rows.filter((r) => r.signal.state === "READY").length;
-  const watching = rows.filter((r) => r.signal.state === "WATCH").length;
+  const ready = rows.filter((r) => r.signal.readiness === "READY").length;
+  const watching = rows.filter((r) => r.signal.readiness === "WATCH").length;
 
   return (
     <AppShell>
@@ -54,9 +60,9 @@ function Dashboard() {
             <Stat label="Pairs scanned" value={rows.length} />
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            Confirmation timeframes: {settings.confirmationTimeframes.join(" · ")} · execution{" "}
-            {settings.executionTimeframe}. Risk {settings.risk.riskPercent}% of{" "}
-            {settings.risk.accountCurrency} {settings.risk.accountCapital}.
+            All nine timeframes analysed — MN, W1, D1, H4, H1, M30, M15, M5, M1. Risk{" "}
+            {settings.risk.riskPercent}% of {settings.risk.accountCurrency}{" "}
+            {settings.risk.accountCapital}.
           </p>
           {data?.notes?.length ? (
             <ul className="mt-2 space-y-1 text-[11px] text-warn">
@@ -91,17 +97,17 @@ function Dashboard() {
                 id: newId(),
                 createdAt: Date.now(),
                 symbol: row.symbol,
-                direction: row.signal.direction,
-                setupType: row.signal.setupType,
-                score: row.signal.confidenceScore,
-                entryZone: row.signal.entryZone,
+                direction: row.signal.direction ?? "WAIT",
+                setupType: row.signal.label,
+                score: row.signal.score.value,
+                entryZone: row.signal.entryZone ? [...row.signal.entryZone] : null,
                 stopLoss: row.signal.stopLoss,
                 takeProfit1: row.signal.takeProfit1,
                 taken: null,
                 outcome: "PENDING",
                 rMultiple: null,
                 dataKind: row.quote.kind,
-                session: row.signal.session,
+                session: toRecordSession(row.signal.session),
                 notes: "",
               })
             }

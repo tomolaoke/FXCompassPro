@@ -16,7 +16,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
           <div>
-            <p className="font-display text-base font-semibold tracking-tight">Caveman Markets</p>
+            <p className="font-display text-base font-semibold tracking-tight">FX Compass Pro</p>
             <p className="text-[11px] text-muted-foreground">Educational market analysis</p>
           </div>
           <span className="rounded-full border border-warn/40 bg-warn/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-warn">

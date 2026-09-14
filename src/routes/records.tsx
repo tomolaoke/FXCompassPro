@@ -8,13 +8,13 @@ import type { SignalRecord } from "@/lib/market/types";
 export const Route = createFileRoute("/records")({
   head: () => ({
     meta: [
-      { title: "Signal records & win rate — Caveman Markets" },
+      { title: "Signal records & win rate — FX Compass Pro" },
       {
         name: "description",
         content:
           "Log whether you took each study signal, mark the outcome, and watch your win rate and average R update live for every pair.",
       },
-      { property: "og:title", content: "Signal records & win rate — Caveman Markets" },
+      { property: "og:title", content: "Signal records & win rate — FX Compass Pro" },
       {
         property: "og:description",
         content:

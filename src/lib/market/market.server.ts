@@ -1,5 +1,6 @@
 import { specFor } from "./instruments";
 import { demoCandles, demoQuote } from "./demo";
+import { normalizeCandles } from "./data/normalize";
 import { TF_MINUTES, type Candle, type Quote, type Timeframe } from "./types";
 
 /**
@@ -39,6 +40,12 @@ export interface SeriesResult {
   provider: string;
   real: boolean;
   notes: string[];
+  /**
+   * Which requested timeframes are synthetic sample data rather than a real
+   * provider series. The engine must never derive a trade-ready state from a
+   * timeframe in this set.
+   */
+  syntheticTimeframes: Set<Timeframe>;
 }
 
 function apiKey(): string | undefined {
@@ -64,8 +71,55 @@ function store(key: string, value: unknown) {
   cache.set(key, { at: Date.now(), value });
 }
 
+/**
+ * Once Twelve Data reports the daily credit quota exhausted, every further
+ * request today will fail the same way — so stop sending them. Without this,
+ * a six-pair watchlist keeps re-attempting three requests per symbol on every
+ * refresh, timing out slowly against an account that cannot possibly succeed
+ * again before the quota resets at UTC midnight.
+ */
+let quotaExhaustedUntil: number | null = null;
+
+function nextUtcMidnight(from: number): number {
+  const d = new Date(from);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+}
+
+function isQuotaExhausted(now: number): boolean {
+  if (quotaExhaustedUntil === null) return false;
+  if (now >= quotaExhaustedUntil) {
+    quotaExhaustedUntil = null;
+    return false;
+  }
+  return true;
+}
+
+const REQUEST_TIMEOUT_MS = 15_000;
+
+class TwelveDataQuotaError extends Error {}
+
 async function getJson(url: string): Promise<unknown> {
-  const res = await fetch(url, { headers: { accept: "application/json" } });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error(`request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  }
+  if (res.status === 429) {
+    const body = (await res.json().catch(() => null)) as { message?: string } | null;
+    const message = body?.message ?? "rate limited";
+    if (/run out of api credits for the day/i.test(message)) {
+      quotaExhaustedUntil = nextUtcMidnight(Date.now());
+      throw new TwelveDataQuotaError(message);
+    }
+    throw new Error(`HTTP 429: ${message}`);
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return (await res.json()) as unknown;
 }
@@ -78,7 +132,19 @@ interface TdBar {
   close: string;
 }
 
-function parseBars(raw: unknown, digits: number): Candle[] {
+/**
+ * Parses the provider response into candles and normalises them.
+ *
+ * The request explicitly asks for `&timezone=UTC` (see loadBase), which is
+ * what makes appending "Z" to the returned datetime correct — without that
+ * parameter, TwelveData returns times in the exchange's local timezone, and
+ * appending "Z" would silently mislabel them as UTC when they are not.
+ *
+ * `expectedGapMs` is the base series' own bar spacing, used only to size the
+ * gap-detection tolerance — it is unrelated to the target timeframe a caller
+ * may later roll these bars up into.
+ */
+function parseBars(raw: unknown, digits: number, expectedGapMs: number): Candle[] {
   const values = (raw as { values?: TdBar[] } | null)?.values;
   if (!Array.isArray(values)) return [];
   const candles = values
@@ -95,7 +161,10 @@ function parseBars(raw: unknown, digits: number): Candle[] {
       };
     })
     .filter((c) => Number.isFinite(c.t) && Number.isFinite(c.c));
-  return candles.sort((a, b) => a.t - b.t);
+  // Weekend and holiday closures are expected and far exceed any bar's normal
+  // spacing; normalizeCandles only needs to catch duplicates, disorder and
+  // OHLC faults here; gap classification happens where display context exists.
+  return normalizeCandles(candles, expectedGapMs).candles;
 }
 
 /** UTC bucket start for a timestamp on a given timeframe. */
@@ -150,17 +219,26 @@ async function loadBase(symbol: string, interval: Timeframe, key: string): Promi
   const cacheKey = `td:base:${symbol}:${interval}`;
   const hit = cached<Candle[]>(cacheKey, BASE_TTL[interval] ?? 60_000);
   if (hit && hit.length) return hit;
+
+  if (isQuotaExhausted(Date.now())) {
+    const stale = cache.get(cacheKey)?.value as Candle[] | undefined;
+    if (stale?.length) return stale;
+    throw new TwelveDataQuotaError(
+      "daily credit quota exhausted — skipping request until UTC midnight",
+    );
+  }
+
   const spec = specFor(symbol);
   const url =
     `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol(symbol))}` +
     `&interval=${TD_INTERVAL[interval]}&outputsize=${BASE_SIZE[interval] ?? 1500}` +
-    `&format=JSON&apikey=${encodeURIComponent(key)}`;
+    `&timezone=UTC&format=JSON&apikey=${encodeURIComponent(key)}`;
   try {
     const raw = await getJson(url);
     const status = (raw as { status?: string; message?: string }).status;
     if (status === "error")
       throw new Error((raw as { message?: string }).message ?? "provider error");
-    const candles = parseBars(raw, spec.digits);
+    const candles = parseBars(raw, spec.digits, TF_MINUTES[interval] * 60_000);
     if (candles.length < 30) throw new Error("not enough history returned");
     store(cacheKey, candles);
     return candles;
@@ -210,8 +288,12 @@ export async function loadSeries(symbol: string, timeframes: Timeframe[]): Promi
     }
   }
 
+  const syntheticTimeframes = new Set<Timeframe>();
   for (const tf of timeframes) {
-    if (!series[tf]) series[tf] = demoCandles(symbol, tf);
+    if (!series[tf]) {
+      series[tf] = demoCandles(symbol, tf);
+      syntheticTimeframes.add(tf);
+    }
   }
 
   const real = realCount === timeframes.length && realCount > 0;
@@ -230,6 +312,7 @@ export async function loadSeries(symbol: string, timeframes: Timeframe[]): Promi
         : "Sample dataset (synthetic)",
     real,
     notes,
+    syntheticTimeframes,
   };
 }
 

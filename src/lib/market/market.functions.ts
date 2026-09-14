@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { ALL_TIMEFRAMES, type Timeframe } from "./types";
+import { ALL_TIMEFRAMES as ENGINE_TIMEFRAMES } from "./config/timeframes";
+import { DEFAULT_STRATEGY } from "./config/strategy";
 
 const symbolSchema = z
   .string()
@@ -108,6 +110,67 @@ export const getSignalRun = createServerFn({ method: "POST" })
       generatedAt: Date.now(),
       real: quoteResult.real,
       notes: quoteResult.notes,
+      rows,
+    };
+  });
+
+export interface EngineSignalRunInput {
+  symbols: string[];
+  risk: z.infer<typeof riskSchema>;
+}
+
+/**
+ * Runs the new five-tier engine server-side for a whole watchlist.
+ *
+ * All nine timeframes are always requested — the active strategy decides which
+ * ones are configured, not the caller. Confirmation-timeframe selection from
+ * the old flat model has no equivalent here: it is superseded by
+ * config/strategy.ts's role assignment.
+ */
+export const getEngineSignalRun = createServerFn({ method: "POST" })
+  .inputValidator((input: EngineSignalRunInput) =>
+    z
+      .object({
+        symbols: z.array(symbolSchema).min(1).max(12),
+        risk: riskSchema,
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const { loadQuotes, loadSeries } = await import("./market.server");
+    const { evaluateSignal } = await import("./engine/evaluate");
+
+    const quoteResult = await loadQuotes(data.symbols);
+
+    const rows = await Promise.all(
+      quoteResult.quotes.map(async (quote) => {
+        const seriesResult = await loadSeries(quote.symbol, [...ENGINE_TIMEFRAMES]);
+        const signal = evaluateSignal({
+          symbol: quote.symbol,
+          quote,
+          series: seriesResult.series,
+          syntheticTimeframes: seriesResult.syntheticTimeframes,
+          provider: seriesResult.provider,
+          config: DEFAULT_STRATEGY.config,
+          strategyVersion: DEFAULT_STRATEGY.version,
+          risk: data.risk,
+        });
+        return {
+          symbol: quote.symbol,
+          quote,
+          signal,
+          provider: seriesResult.provider,
+          real: seriesResult.real && quote.kind !== "demo",
+          notes: seriesResult.notes,
+        };
+      }),
+    );
+
+    return {
+      generatedAt: Date.now(),
+      real: quoteResult.real,
+      notes: quoteResult.notes,
+      strategyVersion: DEFAULT_STRATEGY.version,
       rows,
     };
   });

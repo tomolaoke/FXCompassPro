@@ -1,10 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell, DataBadge, Panel } from "@/components/app-shell";
-import { useSignalRun } from "@/lib/market/hooks";
+import { useEngineSignalRun } from "@/lib/market/hooks";
 import { fmtPrice, specFor } from "@/lib/market/instruments";
 import { calculateRisk } from "@/lib/market/risk";
 import { newId, useSettings, useSignalRecords } from "@/lib/market/store";
+import type { Session } from "@/lib/market/types";
+
+/** The engine's CLOSED session has no old-store equivalent; OFF_HOURS is the closest fit for the record. */
+function toRecordSession(session: string): Session {
+  return session === "CLOSED" ? "OFF_HOURS" : (session as Session);
+}
 
 export const Route = createFileRoute("/plan")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -12,13 +18,13 @@ export const Route = createFileRoute("/plan")({
   }),
   head: () => ({
     meta: [
-      { title: "Trade plan & position size — Caveman Markets" },
+      { title: "Trade plan & position size — FX Compass Pro" },
       {
         name: "description",
         content:
           "Enter your account size and risk percent to see the lot size, stop-loss and take-profit levels the deterministic engine derived. Educational only.",
       },
-      { property: "og:title", content: "Trade plan & position size — Caveman Markets" },
+      { property: "og:title", content: "Trade plan & position size — FX Compass Pro" },
       {
         property: "og:description",
         content:
@@ -36,7 +42,7 @@ function PlanPage() {
   const [symbol, setSymbol] = useState(fromSearch ?? settings.watchlist[0] ?? "XAUUSD");
   const spec = specFor(symbol);
 
-  const run = useSignalRun(settings, [symbol]);
+  const run = useEngineSignalRun(settings, [symbol]);
   const row = run.data?.rows[0];
   const signal = row?.signal;
 
@@ -103,8 +109,8 @@ function PlanPage() {
           </div>
           {signal && (
             <p className="mt-2 text-xs text-muted-foreground">
-              Engine reading: {signal.direction} · {signal.state} · {signal.setupType}. Levels below
-              are pre-filled from it; change any of them and the maths follows your numbers.
+              Engine reading: {signal.label}. Levels below are pre-filled from it; change any of
+              them and the maths follows your numbers.
             </p>
           )}
         </Panel>
@@ -249,16 +255,16 @@ function PlanPage() {
                   createdAt: Date.now(),
                   symbol,
                   direction: signal?.direction ?? "WAIT",
-                  setupType: signal?.setupType ?? "Manual plan",
-                  score: signal?.confidenceScore ?? 0,
-                  entryZone: signal?.entryZone ?? null,
+                  setupType: signal?.label ?? "Manual plan",
+                  score: signal?.score.value ?? 0,
+                  entryZone: signal?.entryZone ? [...signal.entryZone] : null,
                   stopLoss: num(stop),
                   takeProfit1: num(tp1),
                   taken: null,
                   outcome: "PENDING",
                   rMultiple: null,
                   dataKind: row?.quote.kind ?? "demo",
-                  session: signal?.session ?? "OFF_HOURS",
+                  session: signal ? toRecordSession(signal.session) : "OFF_HOURS",
                   notes: `Lot ${result.suggestedLot ?? "—"} · risk ${currency} ${result.riskAmount.toFixed(2)}`,
                 })
               }
