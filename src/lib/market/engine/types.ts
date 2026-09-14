@@ -18,6 +18,7 @@ import type {
 import type { MarketSession } from "../domain/clock";
 import type { Timeframe, TimeframeRole } from "../config/timeframes";
 import type { QuoteKind } from "../types";
+import type { BrokerComparison } from "../broker/compare";
 
 export interface TimeframeReading {
   readonly timeframe: Timeframe;
@@ -74,6 +75,7 @@ export interface EngineSignal {
 
   readonly session: MarketSession;
   readonly newsRisk: string | null;
+  readonly brokerComparison: BrokerComparison | null;
 
   readonly dataTimestamp: number;
   readonly dataSource: string;

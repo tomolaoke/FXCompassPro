@@ -133,3 +133,20 @@ export const newsEvents = sqliteTable(
 
 export type NewsEventRow = typeof newsEvents.$inferSelect;
 export type NewNewsEventRow = typeof newsEvents.$inferInsert;
+
+/**
+ * Manually entered broker bid/ask, kept one row per symbol (upserted) since
+ * only the latest broker price is ever meaningful for a comparison — see
+ * docs/data-providers.md. HF Markets, like most retail brokers, has no public
+ * price API, so this is the free path to a broker-price-as-source-of-truth
+ * comparison.
+ */
+export const brokerQuotes = sqliteTable("broker_quotes", {
+  symbol: text("symbol").primaryKey(),
+  bid: real("bid").notNull(),
+  ask: real("ask").notNull(),
+  enteredAt: integer("entered_at").notNull(),
+});
+
+export type BrokerQuoteRow = typeof brokerQuotes.$inferSelect;
+export type NewBrokerQuoteRow = typeof brokerQuotes.$inferInsert;

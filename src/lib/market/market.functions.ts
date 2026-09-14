@@ -173,6 +173,15 @@ export const getEngineSignalRun = createServerFn({ method: "POST" })
           blockingImpacts: DEFAULT_STRATEGY.config.news.blockingImpacts,
         });
 
+        let brokerQuote: { bid: number; ask: number; enteredAt: number } | null = null;
+        try {
+          const { getBrokerQuote } = await import("../db/broker.server");
+          const row = await getBrokerQuote(quote.symbol);
+          if (row) brokerQuote = { bid: row.bid, ask: row.ask, enteredAt: row.enteredAt };
+        } catch {
+          // No database configured yet — comparison simply does not run.
+        }
+
         const signal = evaluateSignal({
           symbol: quote.symbol,
           quote,
@@ -183,6 +192,7 @@ export const getEngineSignalRun = createServerFn({ method: "POST" })
           strategyVersion: DEFAULT_STRATEGY.version,
           risk: data.risk,
           newsRisk: newsCheck.status === "EVENT_NEARBY" ? newsCheck.reason : null,
+          brokerQuote,
         });
         return {
           symbol: quote.symbol,
@@ -339,3 +349,26 @@ export const getUpcomingNewsEventsFn = createServerFn({ method: "POST" }).handle
   const { getUpcomingNewsEvents } = await import("../db/news.server");
   return getUpcomingNewsEvents();
 });
+
+/**
+ * Records a manually entered broker bid/ask. HF Markets, like most retail
+ * brokers, has no public price API, so this is the free path to using the
+ * broker as the source of truth for entry, stop and spread — see
+ * docs/data-providers.md.
+ */
+export const setBrokerQuoteFn = createServerFn({ method: "POST" })
+  .inputValidator((input: { symbol: string; bid: number; ask: number }) =>
+    z
+      .object({
+        symbol: symbolSchema,
+        bid: z.number().positive(),
+        ask: z.number().positive(),
+      })
+      .refine((v) => v.ask > v.bid, { message: "Ask must be above bid" })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const { setBrokerQuote } = await import("../db/broker.server");
+    await setBrokerQuote(data);
+    return { ok: true };
+  });

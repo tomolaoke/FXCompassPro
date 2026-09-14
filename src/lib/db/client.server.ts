@@ -107,6 +107,13 @@ CREATE TABLE IF NOT EXISTS news_events (
 );
 CREATE INDEX IF NOT EXISTS news_events_currency_idx ON news_events (currency);
 CREATE INDEX IF NOT EXISTS news_events_time_idx ON news_events (event_time_utc);
+
+CREATE TABLE IF NOT EXISTS broker_quotes (
+  symbol TEXT PRIMARY KEY,
+  bid REAL NOT NULL,
+  ask REAL NOT NULL,
+  entered_at INTEGER NOT NULL
+);
 `;
 
 async function ensureSchema(target: Client): Promise<void> {

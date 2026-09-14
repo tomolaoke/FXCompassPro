@@ -11,6 +11,11 @@
 import { atr, swings } from "../indicators";
 import { specFor, toPips } from "../instruments";
 import {
+  compareBrokerPrice,
+  PRICE_MISMATCH_MESSAGE,
+  type BrokerComparison,
+} from "../broker/compare";
+import {
   displacementCandles,
   fairValueGaps,
   keyLevels,
@@ -61,6 +66,8 @@ export interface EvaluateInput {
   readonly strategyVersion: string;
   readonly risk: RiskSettings;
   readonly newsRisk?: string | null;
+  /** A manually entered broker price, when one has been recorded for this symbol. */
+  readonly brokerQuote?: { bid: number; ask: number; enteredAt: number } | null;
   readonly clock?: ClockConfig;
   readonly now?: number;
 }
@@ -380,6 +387,24 @@ export function evaluateSignal(input: EvaluateInput): EngineSignal {
     blockReasons.push("NEWS_WINDOW");
   }
 
+  let brokerComparison: BrokerComparison | null = null;
+  if (input.brokerQuote) {
+    brokerComparison = compareBrokerPrice(
+      input.quote.mid,
+      input.brokerQuote,
+      spec.pipSize,
+      config.dataQuality.maxBrokerDivergencePips,
+      now,
+    );
+    if (brokerComparison.toleranceExceeded) {
+      warnings.push(
+        `${PRICE_MISMATCH_MESSAGE} — provider ${input.quote.mid.toFixed(spec.digits)} vs broker ` +
+          `${brokerComparison.brokerMid.toFixed(spec.digits)} (${brokerComparison.differencePips.toFixed(1)} pips).`,
+      );
+      blockReasons.push("BROKER_PRICE_MISMATCH");
+    }
+  }
+
   return {
     symbol: input.symbol,
     strategyVersion: input.strategyVersion,
@@ -412,6 +437,7 @@ export function evaluateSignal(input: EvaluateInput): EngineSignal {
       levels?.invalidationCondition ?? "No setup yet, so nothing to invalidate.",
     session: sessionAt(now, clock),
     newsRisk: input.newsRisk ?? null,
+    brokerComparison,
     dataTimestamp: input.quote.timestamp,
     dataSource: input.quote.provider,
     dataKind: input.quote.kind,
