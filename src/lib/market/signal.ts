@@ -556,7 +556,9 @@ export function evaluateSignal(input: EvaluateInput): Signal {
 
   // --- validation --------------------------------------------------------
   if (direction !== "WAIT") {
-    const [t1, t2, t3] = tps as (number | null)[];
+    const t1 = tps[0] ?? null;
+    const t2 = tps[1] ?? null;
+    const t3 = tps[2] ?? null;
     if (entryPrice === null || stopLoss === null || t1 === null || t2 === null || t3 === null) {
       calculationErrors.push("Entry, stop or targets are missing — the reading cannot be shown.");
     } else if (riskPerUnit === null || riskPerUnit <= 0) {
