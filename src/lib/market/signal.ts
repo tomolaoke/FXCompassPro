@@ -365,28 +365,40 @@ export function evaluateSignal(input: EvaluateInput): Signal {
       warnings.push("Price is not near a mapped level — the setup lacks a location edge.");
     }
 
-    const alignedGap = gaps.find((g) =>
-      isBuy ? g.direction === "BULLISH" : g.direction === "BEARISH",
-    );
-    if (alignedGap) {
+    /**
+     * A zone is only usable if it is reachable: a BUY waits at or below the
+     * current price, a SELL at or above it, and never more than ~2 ATR away.
+     * Without this a valid-looking zone could sit the wrong side of price.
+     */
+    const usableZone = (from: number, to: number): [number, number] | null => {
+      const low = Math.min(from, to);
+      const high = Math.max(from, to);
+      const tolerance = atrValue * 0.25;
+      if (isBuy && low > price + tolerance) return null;
+      if (!isBuy && high < price - tolerance) return null;
+      const distance = isBuy ? price - high : low - price;
+      if (distance > atrValue * 2) return null;
+      return [low, high];
+    };
+
+    const alignedGap = gaps
+      .filter((g) => (isBuy ? g.direction === "BULLISH" : g.direction === "BEARISH"))
+      .map((g) => ({ g, zone: usableZone(g.from, g.to) }))
+      .find((x) => x.zone !== null);
+    if (alignedGap?.zone) {
       score += 8;
-      entryZone = [
-        Math.min(alignedGap.from, alignedGap.to),
-        Math.max(alignedGap.from, alignedGap.to),
-      ];
+      entryZone = alignedGap.zone;
       reasons.push(
-        `${isBuy ? "Bullish" : "Bearish"} fair value gap between ${alignedGap.from.toFixed(spec.digits)} and ${alignedGap.to.toFixed(spec.digits)} available as a limit zone.`,
+        `${isBuy ? "Bullish" : "Bearish"} fair value gap between ${alignedGap.zone[0].toFixed(spec.digits)} and ${alignedGap.zone[1].toFixed(spec.digits)} available as a limit zone.`,
       );
     }
-    const alignedBlock = blocks.find((b) =>
-      isBuy ? b.direction === "BULLISH" : b.direction === "BEARISH",
-    );
-    if (alignedBlock) {
+    const alignedBlock = blocks
+      .filter((b) => (isBuy ? b.direction === "BULLISH" : b.direction === "BEARISH"))
+      .map((b) => ({ b, zone: usableZone(b.from, b.to) }))
+      .find((x) => x.zone !== null);
+    if (alignedBlock?.zone) {
       score += 6;
-      entryZone = entryZone ?? [
-        Math.min(alignedBlock.from, alignedBlock.to),
-        Math.max(alignedBlock.from, alignedBlock.to),
-      ];
+      entryZone = entryZone ?? alignedBlock.zone;
       reasons.push(
         "Order-block approximation aligned with the direction (discretionary, not institutional fact).",
       );
