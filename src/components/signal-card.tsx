@@ -52,7 +52,7 @@ export function SignalCard({
               STATE_TONE[signal.state] ?? STATE_TONE["WAIT"]
             }`}
           >
-            {signal.state === "MISSED" ? "Missed — do not chase" : signal.state}
+            {STATE_LABEL[signal.state] ?? signal.state}
           </span>
           <DataBadge quote={quote} />
         </div>
@@ -198,13 +198,15 @@ export function SignalCard({
         >
           Chart
         </Link>
-        <Link
-          to="/plan"
-          search={{ symbol: signal.symbol }}
-          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-        >
-          Trade plan
-        </Link>
+        {tradable && (
+          <Link
+            to="/plan"
+            search={{ symbol: signal.symbol }}
+            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            Trade plan
+          </Link>
+        )}
         {onLog && (
           <button
             type="button"
