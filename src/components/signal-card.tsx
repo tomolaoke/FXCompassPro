@@ -39,6 +39,12 @@ export function SignalCard({
         ? "text-bear"
         : "text-muted-foreground";
 
+  const tradable =
+    signal.direction !== "WAIT" &&
+    signal.calculationErrors.length === 0 &&
+    signal.state !== "INVALID" &&
+    signal.state !== "INSUFFICIENT_DATA";
+
   return (
     <section className="panel space-y-3 p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
