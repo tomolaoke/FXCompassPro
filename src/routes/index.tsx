@@ -96,8 +96,13 @@ function Dashboard() {
               (r) => r.symbol === row.symbol && Date.now() - r.createdAt < 1000 * 60 * 60 * 6,
             )}
             onLog={() => {
+              // The database id becomes the local record's id too, so a later
+              // outcome check (real price action against the recorded stop
+              // and targets) can write back to the right local row by id
+              // instead of needing a separate correlation table.
+              const localId = newId();
               add({
-                id: newId(),
+                id: localId,
                 createdAt: Date.now(),
                 symbol: row.symbol,
                 direction: row.signal.direction ?? "WAIT",
@@ -115,15 +120,13 @@ function Dashboard() {
               });
               // The full audit trail — every timeframe's state, relation and
               // Stochastic reading, plus the exact strategy version — is kept
-              // server-side so this signal can be reproduced later. The
-              // localStorage record above only holds the summary the UI needs
-              // for the win-rate view.
-              void persistSignal({ data: { signal: row.signal, userDecision: "accepted" } }).catch(
-                () => {
-                  // Best-effort: the local record above already captured the
-                  // decision, so a database hiccup here must not block the UI.
-                },
-              );
+              // server-side so this signal can be reproduced later.
+              void persistSignal({
+                data: { signal: row.signal, userDecision: "accepted", id: localId },
+              }).catch(() => {
+                // Best-effort: the local record above already captured the
+                // decision, so a database hiccup here must not block the UI.
+              });
             }}
           />
         ))}

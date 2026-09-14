@@ -189,6 +189,7 @@ export const recordSignal = createServerFn({ method: "POST" })
       signal: unknown;
       userDecision?: "accepted" | "rejected" | "ignored";
       userDecisionReason?: string;
+      id?: string;
     }) =>
       z
         .object({
@@ -199,6 +200,7 @@ export const recordSignal = createServerFn({ method: "POST" })
           signal: z.record(z.unknown()),
           userDecision: recordDecisionSchema.optional(),
           userDecisionReason: z.string().max(500).optional(),
+          id: z.string().min(1).max(64).optional(),
         })
         .parse(input),
   )
@@ -208,6 +210,7 @@ export const recordSignal = createServerFn({ method: "POST" })
       signal: data.signal as unknown as EngineSignal,
       ...(data.userDecision ? { userDecision: data.userDecision } : {}),
       ...(data.userDecisionReason ? { userDecisionReason: data.userDecisionReason } : {}),
+      ...(data.id ? { id: data.id } : {}),
     });
     return { id };
   });
@@ -253,3 +256,13 @@ export const updateSignalOutcomeFn = createServerFn({ method: "POST" })
     });
     return { ok: true };
   });
+
+/**
+ * Checks every pending, accepted paper trade against real price action since
+ * it was recorded. Called on demand from the Records page — there is no
+ * scheduler in this deployment to run it automatically.
+ */
+export const checkPaperTradesFn = createServerFn({ method: "POST" }).handler(async () => {
+  const { checkPendingPaperTrades } = await import("./paper/check.server");
+  return checkPendingPaperTrades();
+});

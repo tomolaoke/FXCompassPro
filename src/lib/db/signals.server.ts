@@ -19,13 +19,19 @@ export interface RecordSignalInput {
   signal: EngineSignal;
   userDecision?: "accepted" | "rejected" | "ignored";
   userDecisionReason?: string;
+  /**
+   * Lets the caller's own local record share this row's id, so a later
+   * outcome check can write back to the right local entry directly rather
+   * than needing a separate id-correlation lookup.
+   */
+  id?: string;
 }
 
 /** Inserts one immutable audit row. Returns the row's id. */
 export async function recordSignalAudit(input: RecordSignalInput): Promise<string> {
   const { signal } = input;
   const db = await getDb();
-  const id = newId();
+  const id = input.id ?? newId();
 
   await db.insert(schema.signals).values({
     id,
@@ -117,6 +123,32 @@ export async function getSignalHistory(query: SignalHistoryQuery = {}) {
     blockReasons: JSON.parse(row.blockReasonsJson) as string[],
     calculationErrors: JSON.parse(row.calculationErrorsJson) as string[],
   }));
+}
+
+/**
+ * Signals accepted from the UI (a paper-trading commitment) whose outcome is
+ * still PENDING and that carry the levels needed to check it — the working
+ * set for the paper-trading outcome checker.
+ */
+export async function getPendingPaperTrades(limit = 100) {
+  const db = await getDb();
+  const rows = await db
+    .select()
+    .from(schema.signals)
+    .where(eq(schema.signals.userDecision, "accepted"))
+    .orderBy(desc(schema.signals.createdAt))
+    .limit(limit);
+
+  return rows.filter(
+    (r) =>
+      r.outcome === "PENDING" &&
+      r.direction !== null &&
+      r.entryPrice !== null &&
+      r.stopLoss !== null &&
+      r.takeProfit1 !== null &&
+      r.takeProfit2 !== null &&
+      r.takeProfit3 !== null,
+  );
 }
 
 export interface LogAppErrorInput {

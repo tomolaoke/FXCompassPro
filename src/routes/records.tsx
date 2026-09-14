@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { useMemo, useState } from "react";
 import { AppShell, Panel } from "@/components/app-shell";
 import { fmtPrice } from "@/lib/market/instruments";
+import { checkPaperTradesFn } from "@/lib/market/market.functions";
 import { useSignalRecords } from "@/lib/market/store";
 import type { SignalRecord } from "@/lib/market/types";
 
@@ -69,6 +71,34 @@ function avgR(t: Tally): string {
 
 function RecordsScreen() {
   const { records, update, remove, clear } = useSignalRecords();
+  const checkPaperTrades = useServerFn(checkPaperTradesFn);
+  const [checking, setChecking] = useState(false);
+  const [checkNote, setCheckNote] = useState<string | null>(null);
+
+  const handleCheckOutcomes = async () => {
+    setChecking(true);
+    setCheckNote(null);
+    try {
+      const results = await checkPaperTrades();
+      let settled = 0;
+      for (const r of results) {
+        if (r.outcome === "PENDING") continue;
+        update(r.id, { outcome: r.outcome, rMultiple: r.rMultiple });
+        settled += 1;
+      }
+      setCheckNote(
+        settled > 0
+          ? `${settled} of ${results.length} pending trade${results.length === 1 ? "" : "s"} settled from real price action.`
+          : results.length > 0
+            ? `Checked ${results.length} pending trade${results.length === 1 ? "" : "s"} — still running.`
+            : "No accepted signals are pending an outcome.",
+      );
+    } catch {
+      setCheckNote("Could not check outcomes — the database may not be configured yet.");
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const overall = useMemo(() => tally(records), [records]);
   const perPair = useMemo(() => {
@@ -89,15 +119,25 @@ function RecordsScreen() {
         <Panel
           title="Live record"
           action={
-            records.length ? (
+            <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => clear()}
-                className="rounded-md border border-border px-3 py-1 text-xs font-medium hover:bg-accent"
+                onClick={() => void handleCheckOutcomes()}
+                disabled={checking}
+                className="rounded-md border border-border px-3 py-1 text-xs font-medium hover:bg-accent disabled:opacity-50"
               >
-                Clear all
+                {checking ? "Checking…" : "Check outcomes"}
               </button>
-            ) : null
+              {records.length ? (
+                <button
+                  type="button"
+                  onClick={() => clear()}
+                  className="rounded-md border border-border px-3 py-1 text-xs font-medium hover:bg-accent"
+                >
+                  Clear all
+                </button>
+              ) : null}
+            </div>
           }
         >
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -111,6 +151,12 @@ function RecordsScreen() {
             {overall.breakeven}BE). Past results describe what already happened — they do not
             predict the next trade.
           </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            "Check outcomes" compares each accepted signal's stop and targets against real price
+            action since it was recorded — not a guess. It never uses sample data to settle a
+            result.
+          </p>
+          {checkNote && <p className="mt-2 text-xs text-warn">{checkNote}</p>}
         </Panel>
 
         {perPair.length > 0 && (
