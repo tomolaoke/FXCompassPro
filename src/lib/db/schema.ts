@@ -105,3 +105,31 @@ export const appErrors = sqliteTable(
 
 export type AppErrorRow = typeof appErrors.$inferSelect;
 export type NewAppErrorRow = typeof appErrors.$inferInsert;
+
+/**
+ * Manually entered high-impact news events — see docs/data-providers.md for
+ * why: free economic-calendar APIs need a key and are unreliable, so the
+ * honest default is a calendar you maintain yourself, with the app refusing
+ * to treat an empty or unmaintained calendar as "no news".
+ */
+export const newsEvents = sqliteTable(
+  "news_events",
+  {
+    id: text("id").primaryKey(),
+    currency: text("currency").notNull(),
+    title: text("title").notNull(),
+    impact: text("impact").notNull(), // "HIGH" | "MEDIUM" | "LOW"
+    eventTimeUtc: integer("event_time_utc").notNull(),
+    source: text("source").notNull().default("manual"),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch('now', 'subsec') * 1000)`),
+  },
+  (table) => [
+    index("news_events_currency_idx").on(table.currency),
+    index("news_events_time_idx").on(table.eventTimeUtc),
+  ],
+);
+
+export type NewsEventRow = typeof newsEvents.$inferSelect;
+export type NewNewsEventRow = typeof newsEvents.$inferInsert;

@@ -140,12 +140,39 @@ export const getEngineSignalRun = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const { loadQuotes, loadSeries } = await import("./market.server");
     const { evaluateSignal } = await import("./engine/evaluate");
+    const { checkNewsWindow, currenciesFor } = await import("./news/check");
 
     const quoteResult = await loadQuotes(data.symbols);
+    const notes = [...quoteResult.notes];
+
+    // One calendar-wide fetch covers every symbol in the watchlist; the news
+    // check itself is per-symbol only in which currencies it filters to.
+    let allEvents: import("./news/types").NewsEvent[] = [];
+    try {
+      const { getAllNewsEvents } = await import("../db/news.server");
+      allEvents = await getAllNewsEvents();
+    } catch {
+      // No database configured yet, or unreachable — the check below already
+      // treats an empty calendar as UNAVAILABLE, which is the correct default.
+    }
+    if (allEvents.length === 0) {
+      notes.push(
+        "NEWS CHECK UNAVAILABLE — VERIFY ECONOMIC CALENDAR MANUALLY. No events are configured.",
+      );
+    }
 
     const rows = await Promise.all(
       quoteResult.quotes.map(async (quote) => {
         const seriesResult = await loadSeries(quote.symbol, [...ENGINE_TIMEFRAMES]);
+        const relevantCurrencies = new Set(currenciesFor(quote.symbol));
+        const relevantEvents = allEvents.filter((e) => relevantCurrencies.has(e.currency));
+        const newsCheck = checkNewsWindow(allEvents, relevantEvents, Date.now(), {
+          enabled: DEFAULT_STRATEGY.config.news.enabled,
+          bufferBeforeMinutes: DEFAULT_STRATEGY.config.news.bufferBeforeMinutes,
+          bufferAfterMinutes: DEFAULT_STRATEGY.config.news.bufferAfterMinutes,
+          blockingImpacts: DEFAULT_STRATEGY.config.news.blockingImpacts,
+        });
+
         const signal = evaluateSignal({
           symbol: quote.symbol,
           quote,
@@ -155,6 +182,7 @@ export const getEngineSignalRun = createServerFn({ method: "POST" })
           config: DEFAULT_STRATEGY.config,
           strategyVersion: DEFAULT_STRATEGY.version,
           risk: data.risk,
+          newsRisk: newsCheck.status === "EVENT_NEARBY" ? newsCheck.reason : null,
         });
         return {
           symbol: quote.symbol,
@@ -163,6 +191,7 @@ export const getEngineSignalRun = createServerFn({ method: "POST" })
           provider: seriesResult.provider,
           real: seriesResult.real && quote.kind !== "demo",
           notes: seriesResult.notes,
+          newsStatus: newsCheck.status,
         };
       }),
     );
@@ -170,7 +199,7 @@ export const getEngineSignalRun = createServerFn({ method: "POST" })
     return {
       generatedAt: Date.now(),
       real: quoteResult.real,
-      notes: quoteResult.notes,
+      notes,
       strategyVersion: DEFAULT_STRATEGY.version,
       rows,
     };
@@ -265,4 +294,48 @@ export const updateSignalOutcomeFn = createServerFn({ method: "POST" })
 export const checkPaperTradesFn = createServerFn({ method: "POST" }).handler(async () => {
   const { checkPendingPaperTrades } = await import("./paper/check.server");
   return checkPendingPaperTrades();
+});
+
+const impactSchema = z.enum(["HIGH", "MEDIUM", "LOW"]);
+
+/**
+ * Manually maintained economic calendar — see docs/data-providers.md for why
+ * this exists instead of a paid API. An empty calendar is treated as
+ * UNAVAILABLE, never as "no news"; see news/check.ts.
+ */
+export const addNewsEventFn = createServerFn({ method: "POST" })
+  .inputValidator(
+    (input: {
+      currency: string;
+      title: string;
+      impact: "HIGH" | "MEDIUM" | "LOW";
+      eventTimeUtc: number;
+    }) =>
+      z
+        .object({
+          currency: z.string().trim().length(3),
+          title: z.string().trim().min(1).max(120),
+          impact: impactSchema,
+          eventTimeUtc: z.number().int().positive(),
+        })
+        .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const { addNewsEvent } = await import("../db/news.server");
+    return addNewsEvent(data);
+  });
+
+export const removeNewsEventFn = createServerFn({ method: "POST" })
+  .inputValidator((input: { id: string }) =>
+    z.object({ id: z.string().min(1).max(64) }).parse(input),
+  )
+  .handler(async ({ data }) => {
+    const { removeNewsEvent } = await import("../db/news.server");
+    await removeNewsEvent(data.id);
+    return { ok: true };
+  });
+
+export const getUpcomingNewsEventsFn = createServerFn({ method: "POST" }).handler(async () => {
+  const { getUpcomingNewsEvents } = await import("../db/news.server");
+  return getUpcomingNewsEvents();
 });

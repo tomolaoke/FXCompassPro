@@ -95,6 +95,18 @@ CREATE TABLE IF NOT EXISTS app_errors (
   context_json TEXT
 );
 CREATE INDEX IF NOT EXISTS app_errors_at_idx ON app_errors (at);
+
+CREATE TABLE IF NOT EXISTS news_events (
+  id TEXT PRIMARY KEY,
+  currency TEXT NOT NULL,
+  title TEXT NOT NULL,
+  impact TEXT NOT NULL,
+  event_time_utc INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT 'manual',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch('now', 'subsec') * 1000)
+);
+CREATE INDEX IF NOT EXISTS news_events_currency_idx ON news_events (currency);
+CREATE INDEX IF NOT EXISTS news_events_time_idx ON news_events (event_time_utc);
 `;
 
 async function ensureSchema(target: Client): Promise<void> {
