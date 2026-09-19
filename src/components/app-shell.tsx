@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { DISCLAIMER } from "@/lib/market/signal";
 import type { Quote } from "@/lib/market/types";
 
@@ -49,6 +49,19 @@ export function AppShell({ children }: { children: ReactNode }) {
 }
 
 export function DataBadge({ quote }: { quote: Quote | undefined }) {
+  // Age is computed from Date.now(), which differs between the server-render
+  // instant and the client-hydration instant by however long the request
+  // took — rendering it on both sides produces two different strings for the
+  // same markup and React (correctly) flags that as a hydration mismatch.
+  // Committing to a value only after mount keeps server and client markup
+  // identical on the first paint; the real age fills in a moment later.
+  const [age, setAge] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!quote) return;
+    setAge(Math.max(0, Math.round((Date.now() - quote.timestamp) / 60000)));
+  }, [quote]);
+
   if (!quote) return null;
   const tone =
     quote.kind === "demo"
@@ -56,13 +69,13 @@ export function DataBadge({ quote }: { quote: Quote | undefined }) {
       : quote.kind === "live"
         ? "border-bull/40 bg-bull/10 text-bull"
         : "border-warn/40 bg-warn/10 text-warn";
-  const age = Math.max(0, Math.round((Date.now() - quote.timestamp) / 60000));
   return (
     <span
       className={`rounded-md border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${tone}`}
       title={quote.note ?? quote.provider}
     >
-      {quote.kind === "demo" ? "No real data — sample" : quote.kind} · {quote.provider} · {age}m
+      {quote.kind === "demo" ? "No real data — sample" : quote.kind} · {quote.provider}
+      {age !== null ? ` · ${age}m` : ""}
     </span>
   );
 }

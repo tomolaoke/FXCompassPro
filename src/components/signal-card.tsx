@@ -3,6 +3,7 @@ import { DataBadge } from "@/components/app-shell";
 import { ROLE_LABEL } from "@/lib/market/config/timeframes";
 import {
   allowsDirectionalBadge,
+  isDataProblem,
   requiresCountertrendWarning,
   TIMEFRAME_STATE_LABEL,
 } from "@/lib/market/domain/states";
@@ -42,15 +43,20 @@ const ROLE_ORDER = [
 export function SignalCard({
   signal,
   quote,
+  notes,
   onLog,
   logged,
 }: {
   signal: EngineSignal;
   quote: Quote;
+  /** Data-pipeline notes for this symbol — rate limits, short history, provider fallbacks. */
+  notes?: readonly string[];
   onLog?: () => void;
   logged?: boolean;
 }) {
   const tradable = signal.readiness === "READY" && signal.calculationErrors.length === 0;
+  const validCount = signal.timeframes.filter((t) => !isDataProblem(t.state)).length;
+  const totalCount = signal.timeframes.length;
 
   return (
     <section className="panel space-y-3 p-4">
@@ -72,9 +78,24 @@ export function SignalCard({
         </div>
       </div>
 
-      <p className="text-sm tabular-nums text-muted-foreground">
-        price {fmtPrice(quote.mid, signal.symbol)}
-      </p>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p className="text-sm tabular-nums text-muted-foreground">
+          price {fmtPrice(quote.mid, signal.symbol)}
+        </p>
+        <p
+          className={`text-[11px] font-medium tabular-nums ${validCount === totalCount ? "text-muted-foreground" : "text-warn"}`}
+        >
+          {validCount}/{totalCount} timeframes valid
+        </p>
+      </div>
+
+      {notes && notes.length > 0 && (
+        <ul className="space-y-1 rounded-md border border-warn/40 bg-warn/10 p-2 text-[11px] text-warn">
+          {notes.map((n) => (
+            <li key={n}>! {n}</li>
+          ))}
+        </ul>
+      )}
 
       {/* short-term vs higher-timeframe, always shown separately */}
       <div className="grid grid-cols-2 gap-2 text-xs">

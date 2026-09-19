@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
+import { useEffect, useState } from "react";
 import { getEngineSignalRun, getQuotes, getSeries, getSignalRun } from "./market.functions";
-import type { AppSettings, Timeframe } from "./types";
+import type { AppSettings, Quote, Timeframe } from "./types";
+import type { EngineSignal } from "./engine/types";
 
 /** @deprecated Use useEngineSignalRun. Kept only until every caller has migrated. */
 export function useSignalRun(settings: AppSettings, symbols?: string[]) {
@@ -56,6 +58,97 @@ export function useEngineSignalRun(settings: AppSettings, symbols?: string[]) {
     refetchInterval: 5 * 60_000,
     enabled: list.length > 0,
   });
+}
+
+/**
+ * Splits a watchlist into fixed-size groups, in order. Pure and exported for
+ * direct testing — the group size is the one number that decides whether a
+ * scan cycle fits inside the free Twelve Data tier's per-minute budget.
+ */
+export function chunkWatchlist(watchlist: readonly string[], size: number): string[][] {
+  if (size <= 0) return watchlist.length ? [[...watchlist]] : [];
+  const chunks: string[][] = [];
+  for (let i = 0; i < watchlist.length; i += size) {
+    chunks.push(watchlist.slice(i, i + size));
+  }
+  return chunks;
+}
+
+export interface EngineSignalRow {
+  symbol: string;
+  quote: Quote;
+  signal: EngineSignal;
+  provider: string;
+  real: boolean;
+  notes: string[];
+}
+
+export interface RotatingSignalRunResult {
+  /** One entry per watchlist symbol, in watchlist order. Null until that symbol's first turn completes. */
+  rows: (EngineSignalRow | null)[];
+  notes: string[];
+  isLoading: boolean;
+  isFetching: boolean;
+  isError: boolean;
+  refetch: () => void;
+}
+
+/**
+ * A 6-symbol × 9-timeframe watchlist needs 18 provider requests to fully
+ * refresh — Twelve Data's free tier allows 8 per minute. Trying to refresh
+ * the whole watchlist in one request always loses most of it to the budget
+ * (see docs/data-providers.md and market.server.ts's local request budget).
+ *
+ * Scanning two symbols per cycle (6 requests) instead keeps every cycle
+ * safely inside budget, and cycling through the watchlist means every symbol
+ * still gets refreshed every few minutes rather than most of them never
+ * getting through at all. Results accumulate across cycles rather than
+ * flashing back to "not scanned yet" every time a different chunk is active.
+ */
+export function useRotatingEngineSignalRun(
+  settings: AppSettings,
+  chunkSize = 2,
+  cycleMs = 45_000,
+): RotatingSignalRunResult {
+  const chunks = chunkWatchlist(settings.watchlist, chunkSize);
+  const [chunkIndex, setChunkIndex] = useState(0);
+  const safeIndex = chunks.length > 0 ? chunkIndex % chunks.length : 0;
+  const activeChunk = chunks[safeIndex] ?? [];
+
+  useEffect(() => {
+    if (chunks.length <= 1) return;
+    const timer = setInterval(() => setChunkIndex((i) => (i + 1) % chunks.length), cycleMs);
+    return () => clearInterval(timer);
+    // chunks.length and cycleMs come from settings/props that rarely change;
+    // re-deriving `chunks` itself on every render would restart the timer.
+  }, [chunks.length, cycleMs]);
+
+  const query = useEngineSignalRun(settings, activeChunk);
+  // A plain useState, not a ref: merging into a ref inside an effect would
+  // update the map one render late, since a ref mutation alone never
+  // schedules a re-render — the just-arrived chunk would only show up after
+  // whatever *next* re-render happened to occur for an unrelated reason.
+  const [accumulated, setAccumulated] = useState(new Map<string, EngineSignalRow>());
+
+  useEffect(() => {
+    if (!query.data) return;
+    setAccumulated((prev) => {
+      const next = new Map(prev);
+      for (const row of query.data.rows) next.set(row.symbol, row);
+      return next;
+    });
+  }, [query.data]);
+
+  const rows = settings.watchlist.map((symbol) => accumulated.get(symbol) ?? null);
+
+  return {
+    rows,
+    notes: query.data?.notes ?? [],
+    isLoading: query.isLoading && accumulated.size === 0,
+    isFetching: query.isFetching,
+    isError: query.isError,
+    refetch: () => void query.refetch(),
+  };
 }
 
 export function useQuotes(symbols: string[]) {

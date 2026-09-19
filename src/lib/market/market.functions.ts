@@ -25,11 +25,22 @@ export const getQuotes = createServerFn({ method: "POST" })
 
 export const getSeries = createServerFn({ method: "POST" })
   .inputValidator((input: { symbol: string; timeframes: Timeframe[] }) =>
-    z.object({ symbol: symbolSchema, timeframes: z.array(tfSchema).min(1).max(8) }).parse(input),
+    // max(9): all nine timeframes must be requestable — a cap of 8 meant this
+    // function could never serve the full set (config/timeframes.ts). Never
+    // hard-code a smaller timeframe list here; ALL_TIMEFRAMES is the source
+    // of truth for how many that is.
+    z.object({ symbol: symbolSchema, timeframes: z.array(tfSchema).min(1).max(9) }).parse(input),
   )
   .handler(async ({ data }) => {
     const { loadSeries } = await import("./market.server");
-    return loadSeries(data.symbol, data.timeframes);
+    const result = await loadSeries(data.symbol, data.timeframes);
+    // TanStack Start's client/server serializer cannot cross this boundary
+    // with a raw Set — SeriesResult.syntheticTimeframes is a Set internally
+    // because callers check membership, but here it must be a plain array.
+    // getEngineSignalRun never hit this because it forwards only specific
+    // fields, not the whole SeriesResult; this function returns the object
+    // directly, so the Set has to be converted before it leaves the server.
+    return { ...result, syntheticTimeframes: [...result.syntheticTimeframes] };
   });
 
 const riskSchema = z.object({

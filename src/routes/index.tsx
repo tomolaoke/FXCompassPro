@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell, Panel } from "@/components/app-shell";
 import { SignalCard } from "@/components/signal-card";
-import { useEngineSignalRun } from "@/lib/market/hooks";
+import { useRotatingEngineSignalRun } from "@/lib/market/hooks";
 import { recordSignal } from "@/lib/market/market.functions";
 import {
   getNotificationPermission,
@@ -42,15 +42,28 @@ function toRecordSession(session: string): Session {
 function Dashboard() {
   const { settings, update } = useSettings();
   const { records, add } = useSignalRecords();
-  const { data, isLoading, isError, refetch, isFetching } = useEngineSignalRun(settings);
+  const {
+    rows: slots,
+    notes,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useRotatingEngineSignalRun(settings);
   const persistSignal = useServerFn(recordSignal);
-  const [permission, setPermission] = useState<NotificationPermissionState>(() =>
-    getNotificationPermission(),
-  );
+  // Server and first client render must agree, so this starts at "unsupported"
+  // on both sides — same reason as DataBadge's age in app-shell.tsx — and the
+  // real permission (which depends on `window`/`Notification`, unavailable
+  // during SSR) is read only after mount.
+  const [permission, setPermission] = useState<NotificationPermissionState>("unsupported");
+  useEffect(() => {
+    setPermission(getNotificationPermission());
+  }, []);
 
-  const rows = useMemo(() => data?.rows ?? [], [data]);
+  const rows = useMemo(() => slots.filter((r) => r !== null), [slots]);
   const ready = rows.filter((r) => r.signal.readiness === "READY").length;
   const watching = rows.filter((r) => r.signal.readiness === "WATCH").length;
+  const notScannedCount = slots.length - rows.length;
 
   const notifiableRows = useMemo(
     () =>
@@ -95,10 +108,11 @@ function Dashboard() {
             </div>
           }
         >
-          <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="grid grid-cols-4 gap-2 text-center">
             <Stat label="Ready" value={ready} tone="bull" />
             <Stat label="Watching" value={watching} tone="warn" />
             <Stat label="Pairs scanned" value={rows.length} />
+            <Stat label="Awaiting turn" value={notScannedCount} />
           </div>
           {settings.notificationsEnabled && permission === "granted" && (
             <p className="mt-2 text-[11px] text-muted-foreground">
@@ -107,13 +121,19 @@ function Dashboard() {
             </p>
           )}
           <p className="mt-3 text-xs text-muted-foreground">
-            All nine timeframes analysed — MN, W1, D1, H4, H1, M30, M15, M5, M1. Risk{" "}
-            {settings.risk.riskPercent}% of {settings.risk.accountCurrency}{" "}
-            {settings.risk.accountCapital}.
+            All nine timeframes are requested for every pair — MN, W1, D1, H4, H1, M30, M15, M5, M1
+            — but a free-tier data plan cannot always return all nine at once; each card below
+            states exactly how many actually came back valid. Risk {settings.risk.riskPercent}% of{" "}
+            {settings.risk.accountCurrency} {settings.risk.accountCapital}.
           </p>
-          {data?.notes?.length ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Two pairs are scanned per cycle — 18 provider requests for a full watchlist would exceed
+            the free plan's 8-per-minute limit in one burst. The watchlist rotates through every
+            pair over a few minutes; results build up rather than resetting each cycle.
+          </p>
+          {notes.length ? (
             <ul className="mt-2 space-y-1 text-[11px] text-warn">
-              {data.notes.slice(0, 4).map((n) => (
+              {notes.slice(0, 4).map((n) => (
                 <li key={n}>! {n}</li>
               ))}
             </ul>
@@ -131,49 +151,64 @@ function Dashboard() {
           </Panel>
         )}
 
-        {rows.map((row) => (
-          <SignalCard
-            key={row.symbol}
-            signal={row.signal}
-            quote={row.quote}
-            logged={records.some(
-              (r) => r.symbol === row.symbol && Date.now() - r.createdAt < 1000 * 60 * 60 * 6,
-            )}
-            onLog={() => {
-              // The database id becomes the local record's id too, so a later
-              // outcome check (real price action against the recorded stop
-              // and targets) can write back to the right local row by id
-              // instead of needing a separate correlation table.
-              const localId = newId();
-              add({
-                id: localId,
-                createdAt: Date.now(),
-                symbol: row.symbol,
-                direction: row.signal.direction ?? "WAIT",
-                setupType: row.signal.label,
-                score: row.signal.score.value,
-                entryZone: row.signal.entryZone ? [...row.signal.entryZone] : null,
-                stopLoss: row.signal.stopLoss,
-                takeProfit1: row.signal.takeProfit1,
-                taken: null,
-                outcome: "PENDING",
-                rMultiple: null,
-                dataKind: row.quote.kind,
-                session: toRecordSession(row.signal.session),
-                notes: "",
-              });
-              // The full audit trail — every timeframe's state, relation and
-              // Stochastic reading, plus the exact strategy version — is kept
-              // server-side so this signal can be reproduced later.
-              void persistSignal({
-                data: { signal: row.signal, userDecision: "accepted", id: localId },
-              }).catch(() => {
-                // Best-effort: the local record above already captured the
-                // decision, so a database hiccup here must not block the UI.
-              });
-            }}
-          />
-        ))}
+        {settings.watchlist.map((symbol, i) => {
+          const row = slots[i];
+          if (!row) {
+            return (
+              <div
+                key={symbol}
+                className="panel flex items-center justify-between p-4 text-sm text-muted-foreground"
+              >
+                <span className="font-medium text-foreground">{symbol}</span>
+                <span>Not scanned this cycle — waiting its turn</span>
+              </div>
+            );
+          }
+          return (
+            <SignalCard
+              key={row.symbol}
+              signal={row.signal}
+              quote={row.quote}
+              notes={row.notes}
+              logged={records.some(
+                (r) => r.symbol === row.symbol && Date.now() - r.createdAt < 1000 * 60 * 60 * 6,
+              )}
+              onLog={() => {
+                // The database id becomes the local record's id too, so a later
+                // outcome check (real price action against the recorded stop
+                // and targets) can write back to the right local row by id
+                // instead of needing a separate correlation table.
+                const localId = newId();
+                add({
+                  id: localId,
+                  createdAt: Date.now(),
+                  symbol: row.symbol,
+                  direction: row.signal.direction ?? "WAIT",
+                  setupType: row.signal.label,
+                  score: row.signal.score.value,
+                  entryZone: row.signal.entryZone ? [...row.signal.entryZone] : null,
+                  stopLoss: row.signal.stopLoss,
+                  takeProfit1: row.signal.takeProfit1,
+                  taken: null,
+                  outcome: "PENDING",
+                  rMultiple: null,
+                  dataKind: row.quote.kind,
+                  session: toRecordSession(row.signal.session),
+                  notes: "",
+                });
+                // The full audit trail — every timeframe's state, relation and
+                // Stochastic reading, plus the exact strategy version — is kept
+                // server-side so this signal can be reproduced later.
+                void persistSignal({
+                  data: { signal: row.signal, userDecision: "accepted", id: localId },
+                }).catch(() => {
+                  // Best-effort: the local record above already captured the
+                  // decision, so a database hiccup here must not block the UI.
+                });
+              }}
+            />
+          );
+        })}
       </div>
     </AppShell>
   );

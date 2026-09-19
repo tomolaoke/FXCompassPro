@@ -2,6 +2,7 @@ import { specFor } from "./instruments";
 import { demoCandles, demoQuote } from "./demo";
 import { normalizeCandles } from "./data/normalize";
 import { aggregate } from "./data/aggregate";
+import { timeframeDef } from "./config/timeframes";
 import { TF_MINUTES, type Candle, type Quote, type Timeframe } from "./types";
 
 /**
@@ -220,12 +221,34 @@ function parseBars(raw: unknown, digits: number, expectedGapMs: number): Candle[
  * Free TwelveData plans allow only a handful of requests per minute, so we
  * never fire one call per timeframe.
  */
-/** Just enough bars to roll each base up into its largest timeframe. */
-const BASE_SIZE: Partial<Record<Timeframe, number>> = { M1: 400, M5: 1500, D1: 1200 };
-/** How long a base series stays fresh; longer timeframes move slowly. */
+/**
+ * Just enough bars to roll each base up into its largest timeframe.
+ *
+ * The M5 base must cover enough history for H4, its largest derived
+ * timeframe, to clear Stochastic(25,2,4)'s 60-bar minimum
+ * (config/timeframes.ts). 1500 5-minute bars is only ~5 days — about 31 H4
+ * candles — which is structurally short of 60 no matter how healthy the API
+ * connection is: H4 would read DATA_MISSING on every single run. 4000 bars is
+ * ~14 days, giving H4 roughly 83 candles. Outputsize does not cost extra
+ * Twelve Data credits — the request itself is metered, not its size — so
+ * this is free to raise.
+ */
+const BASE_SIZE: Partial<Record<Timeframe, number>> = { M1: 400, M5: 4000, D1: 1200 };
+/**
+ * How long a base series stays fresh.
+ *
+ * A 6-symbol watchlist needs 18 requests to fully refresh (3 bases per
+ * symbol) but Twelve Data's free tier allows 8/minute — a cold cache cannot
+ * fill in one burst regardless of pacing. Longer TTLs reduce how often that
+ * burst has to happen at all: M1 and M5 still refresh well inside the
+ * staleness limit their derived timeframes actually enforce
+ * (config/timeframes.ts: M1 stale at 5min, M5 at 20min, M15 at 60min), so
+ * this trades a little freshness on the fastest timeframes for the watchlist
+ * actually finishing a refresh cycle.
+ */
 const BASE_TTL: Partial<Record<Timeframe, number>> = {
-  M1: 45_000,
-  M5: 120_000,
+  M1: 90_000,
+  M5: 270_000,
   D1: 3_600_000,
 };
 
@@ -330,8 +353,16 @@ export async function loadSeries(symbol: string, timeframes: Timeframe[]): Promi
       const source = bases[base];
       if (!source?.length) continue;
       const rolled = tf === base ? source : aggregate(source, tf);
-      if (rolled.length < 30) {
-        notes.push(`${tf}: not enough real history to read reliably.`);
+      // Matches the engine's own per-timeframe minimum (config/timeframes.ts)
+      // rather than a separate hardcoded threshold. A mismatch here used to
+      // mean this gate could mark a series "real" with, say, 45 H4 candles,
+      // while the engine's own Stochastic(25,2,4) warm-up (60 bars) rejected
+      // it as DATA_MISSING anyway — two different opinions about the same
+      // data, with no way for the UI to tell which one to trust.
+      if (rolled.length < timeframeDef(tf).minBars) {
+        notes.push(
+          `${tf}: only ${rolled.length} of the required ${timeframeDef(tf).minBars} candles available.`,
+        );
         continue;
       }
       series[tf] = rolled.slice(-320);
