@@ -7,6 +7,7 @@ import {
   requiresCountertrendWarning,
   TIMEFRAME_STATE_LABEL,
 } from "@/lib/market/domain/states";
+import { SESSION_LABEL } from "@/lib/market/domain/clock";
 import { fmtPrice } from "@/lib/market/instruments";
 import type { EngineSignal, TimeframeReading } from "@/lib/market/engine/types";
 import type { Quote } from "@/lib/market/types";
@@ -88,6 +89,13 @@ export function SignalCard({
           {validCount}/{totalCount} timeframes valid
         </p>
       </div>
+
+      {signal.session === "CLOSED" && (
+        <p className="rounded-md border border-warn/40 bg-warn/10 p-2 text-[11px] font-medium text-warn">
+          Market closed — no new trade-ready signal is issued until it reopens. Anything shown here
+          is context, not an active entry.
+        </p>
+      )}
 
       {notes && notes.length > 0 && (
         <ul className="space-y-1 rounded-md border border-warn/40 bg-warn/10 p-2 text-[11px] text-warn">
@@ -202,7 +210,7 @@ export function SignalCard({
         )}
         <p className="mt-2 text-muted-foreground">Trigger: {signal.triggerCondition}</p>
         <p className="text-muted-foreground">Invalidation: {signal.invalidationCondition}</p>
-        <p className="text-muted-foreground">Session: {signal.session.replace(/_/g, " ")}</p>
+        <p className="text-muted-foreground">Session: {SESSION_LABEL[signal.session]}</p>
         <p className="mt-2 text-[10px] text-muted-foreground">
           Strategy version: {signal.strategyVersion}
         </p>
@@ -240,10 +248,21 @@ export function SignalCard({
   );
 }
 
+/** Short chip text for a data-problem state — distinct per problem, never a bare dash. */
+const PROBLEM_CODE: Record<string, string> = {
+  DATA_MISSING: "MISS",
+  DATA_STALE: "STALE",
+  DATA_DELAYED: "DELAY",
+  DATA_INVALID: "BAD",
+  CANDLE_OPEN: "OPEN",
+};
+
 function TimeframeChip({ reading }: { reading: TimeframeReading }) {
   const stateLabel = TIMEFRAME_STATE_LABEL[reading.state];
-  const tone =
-    reading.relation === "AGREEING"
+  const problem = isDataProblem(reading.state);
+  const tone = problem
+    ? "border-warn/50 bg-warn/10 text-warn"
+    : reading.relation === "AGREEING"
       ? "border-bull/50 bg-bull/10 text-bull"
       : reading.relation === "CONFLICTING"
         ? "border-bear/50 bg-bear/10 text-bear"
@@ -265,7 +284,7 @@ function TimeframeChip({ reading }: { reading: TimeframeReading }) {
       title={title}
       aria-label={`${reading.timeframe}: ${stateLabel}${reading.relation === "CONFLICTING" ? " (conflicting)" : ""}`}
     >
-      {reading.timeframe} {k === null || k === undefined ? "—" : k.toFixed(0)}
+      {reading.timeframe} {problem ? PROBLEM_CODE[reading.state] : (k?.toFixed(0) ?? "—")}
     </span>
   );
 }

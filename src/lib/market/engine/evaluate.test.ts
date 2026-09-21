@@ -205,6 +205,45 @@ describe("THE REGRESSION LOCK — short-term bullish, higher timeframes bearish"
   });
 });
 
+describe("market closed", () => {
+  /** A Saturday — broker server week is Mon 00:00 to Fri 24:00, so this is closed. */
+  const CLOSED_NOW = Date.UTC(2025, 6, 19, 12, 0, 0);
+
+  function closedSeries(shape: SeriesShape): Partial<Record<Timeframe, Candle[]>> {
+    const series: Partial<Record<Timeframe, Candle[]>> = {};
+    for (const tf of ALL_TIMEFRAMES) series[tf] = buildSeries(tf, shape, CLOSED_NOW, CLOCK);
+    return series;
+  }
+
+  it("holds an otherwise-fully-aligned setup at WATCH while the market is closed", () => {
+    const signal = evaluateSignal(
+      baseInput({
+        now: CLOSED_NOW,
+        series: closedSeries("CONFIRMED_BULLISH"),
+        quote: { ...quote(), timestamp: CLOSED_NOW },
+      }),
+    );
+    expect(signal.session).toBe("CLOSED");
+    expect(signal.readiness).not.toBe("READY");
+    expect(signal.readiness).toBe("WATCH");
+    expect(signal.label).not.toContain("READY");
+    expect(signal.blockReasons).toContain("MARKET_CLOSED");
+  });
+
+  it("still reports direction and higher-timeframe bias while closed — never hides them", () => {
+    const signal = evaluateSignal(
+      baseInput({
+        now: CLOSED_NOW,
+        series: closedSeries("CONFIRMED_BULLISH"),
+        quote: { ...quote(), timestamp: CLOSED_NOW },
+      }),
+    );
+    expect(signal.direction).toBe("BUY");
+    expect(signal.shortTermDirection).toBe("BULLISH");
+    expect(signal.higherTimeframeBias).toBe("BULLISH");
+  });
+});
+
 describe("countertrend labelling when only the broad context disagrees", () => {
   it("labels a READY setup as countertrend when MN/W1 conflict but D1/H4 agree", () => {
     const signal = evaluateSignal(

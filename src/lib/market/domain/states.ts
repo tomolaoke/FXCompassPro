@@ -409,6 +409,7 @@ export const BLOCK_REASONS = [
   "NO_STRUCTURE_CONFIRMATION",
   "DAILY_RISK_LIMIT",
   "MANUAL_MODE",
+  "MARKET_CLOSED",
 ] as const;
 
 export type BlockReason = (typeof BLOCK_REASONS)[number];
@@ -431,6 +432,7 @@ export const BLOCK_REASON_LABEL: Record<BlockReason, string> = {
   NO_STRUCTURE_CONFIRMATION: "Price action has not confirmed the turn",
   DAILY_RISK_LIMIT: "Your maximum daily risk has already been committed",
   MANUAL_MODE: "Manual mode never issues a trade permission",
+  MARKET_CLOSED: "The market is closed — no new trade-ready signal can be confirmed",
 };
 
 // ─── Signal lifecycle ────────────────────────────────────────────────────────

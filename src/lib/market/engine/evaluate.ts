@@ -237,6 +237,12 @@ export function evaluateSignal(input: EvaluateInput): EngineSignal {
     }
   }
 
+  // A closed market (weekend, broker server time) has no live price action to
+  // confirm entry or execution against — holding at WATCH rather than issuing
+  // a trade-ready signal that could not actually be filled right now.
+  const session = sessionAt(now, clock);
+  const marketClosed = session === "CLOSED";
+
   // ── readiness ladder ───────────────────────────────────────────────────────
   let readiness: Readiness = "NONE";
   let terminal: "INSUFFICIENT_DATA" | "DATA_QUALITY_ERROR" | "INVALID" | undefined;
@@ -261,7 +267,19 @@ export function evaluateSignal(input: EvaluateInput): EngineSignal {
       blockReasons.push("NOT_FULLY_ALIGNED");
     }
 
-    if (!primaryConflictBlocksProgress && !strictBlocksProgress && !countertrendBlocked) {
+    if (marketClosed) {
+      blockReasons.push("MARKET_CLOSED");
+      warnings.push(
+        "Market is closed (weekend, broker server time) — held at WATCH; no new trade-ready signal until it reopens.",
+      );
+    }
+
+    if (
+      !primaryConflictBlocksProgress &&
+      !strictBlocksProgress &&
+      !countertrendBlocked &&
+      !marketClosed
+    ) {
       // ── SETUP: location + structure must confirm ────────────────────────
       const execTf = pickExecutionTimeframe(config, input.series);
       const exec = execTf ? (input.series[execTf] ?? []) : [];
@@ -435,7 +453,7 @@ export function evaluateSignal(input: EvaluateInput): EngineSignal {
     triggerCondition: levels?.trigger ?? "Waiting for the higher-timeframe stack to line up.",
     invalidationCondition:
       levels?.invalidationCondition ?? "No setup yet, so nothing to invalidate.",
-    session: sessionAt(now, clock),
+    session,
     newsRisk: input.newsRisk ?? null,
     brokerComparison,
     dataTimestamp: input.quote.timestamp,
