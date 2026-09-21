@@ -220,15 +220,31 @@ function PlanPage() {
 
             {result.targets.length > 0 && (
               <div className="mt-3 space-y-1 text-xs">
-                {result.targets.map((t, i) => (
-                  <p key={t.price} className="tabular-nums text-muted-foreground">
-                    TP{i + 1} {fmtPrice(t.price, symbol)} · {t.rr}R ·{" "}
-                    <span className="text-bull">
-                      +{currency} {t.expectedGain?.toFixed(2) ?? "—"}
-                    </span>{" "}
-                    if it reaches there
-                  </p>
-                ))}
+                {result.targets.map((t, i) => {
+                  // While the user hasn't edited anything, these targets are
+                  // exactly the engine's own prefilled values — show the
+                  // engine's own unrounded R:R rather than one re-derived
+                  // from the rounded display strings, so this page can never
+                  // silently disagree with the dashboard card for the same
+                  // untouched setup.
+                  const canonicalRR = !touched
+                    ? [
+                        signal?.riskRewardRatios.tp1,
+                        signal?.riskRewardRatios.tp2,
+                        signal?.riskRewardRatios.tp3,
+                      ][i]
+                    : null;
+                  const rr = canonicalRR ?? t.rr;
+                  return (
+                    <p key={t.price} className="tabular-nums text-muted-foreground">
+                      TP{i + 1} {fmtPrice(t.price, symbol)} · {rr}R ·{" "}
+                      <span className="text-bull">
+                        +{currency} {t.expectedGain?.toFixed(2) ?? "—"}
+                      </span>{" "}
+                      if it reaches there
+                    </p>
+                  );
+                })}
               </div>
             )}
 

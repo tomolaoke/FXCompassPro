@@ -291,19 +291,55 @@ const FUTURE_TOLERANCE_MS = 2 * 60_000;
  * open, put the timestamp in the future and made `age` negative. A negative
  * age silently passed every staleness check. Future timestamps are now treated
  * as a data fault rather than as maximum freshness.
+ *
+ * `ageMs` is always the true, unadjusted elapsed time — never hidden from the
+ * user. `isStale` is judged against a weekend-adjusted effective age instead:
+ * the market is closed Friday evening to Sunday evening (broker server time)
+ * every week, so the last CLOSED D1/H4/H1 candle before a weekend is
+ * genuinely, unavoidably 48+ hours old every single Monday even though
+ * nothing is actually wrong. Without this adjustment, a `staleAfterMinutes`
+ * tight enough to be meaningful on an ordinary trading day (this project's
+ * defaults are deliberately tight — see config/timeframes.ts) would falsely
+ * flag every higher timeframe as DATA_STALE for a large part of every Monday,
+ * which would incorrectly suppress D1/H4-driven context every single week.
+ * Time the market was closed between the candle and now is excluded from the
+ * age used for the staleness comparison only.
  */
 export function freshness(
   timestampUtcMs: number,
   timeframe: Timeframe,
   now: number,
+  config: ClockConfig = DEFAULT_CLOCK_CONFIG,
 ): FreshnessResult {
   const ageMs = now - timestampUtcMs;
   const limitMs = TIMEFRAMES[timeframe].staleAfterMinutes * 60_000;
+  const effectiveAgeMs = Math.max(0, ageMs - marketClosedDurationMs(timestampUtcMs, now, config));
   return {
     ageMs,
-    isStale: ageMs > limitMs,
+    isStale: effectiveAgeMs > limitMs,
     isImplausible: ageMs < -FUTURE_TOLERANCE_MS,
   };
+}
+
+/**
+ * Total time the market was closed between `fromMs` and `toMs`, at
+ * day-granularity — cheap enough to run per timeframe reading (at most ~90
+ * samples for MN's 62-day window) while being exact at the boundary that
+ * actually matters: `isMarketOpen`'s weekday check is itself day-aligned in
+ * the broker's timezone, so sampling once per UTC day slice cannot miss a
+ * weekend.
+ */
+function marketClosedDurationMs(fromMs: number, toMs: number, config: ClockConfig): number {
+  if (toMs <= fromMs) return 0;
+  const DAY_MS = 86_400_000;
+  let closedMs = 0;
+  let cursor = fromMs;
+  while (cursor < toMs) {
+    const sliceEnd = Math.min(cursor + DAY_MS, toMs);
+    if (!isMarketOpen((cursor + sliceEnd) / 2, config)) closedMs += sliceEnd - cursor;
+    cursor = sliceEnd;
+  }
+  return closedMs;
 }
 
 // ─── Market sessions ─────────────────────────────────────────────────────────

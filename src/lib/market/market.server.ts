@@ -269,26 +269,60 @@ function sleep(ms: number): Promise<void> {
 
 const MAX_RETRIES = 2;
 
-async function loadBase(symbol: string, interval: Timeframe, key: string): Promise<Candle[]> {
+/**
+ * How old a stale-cache fallback may be before it is refused outright rather
+ * than served silently. Without a bound, a quota/budget exhaustion could
+ * serve candles hours old while the rest of the pipeline treats them as a
+ * normal fetch — "Never serve cached data after a failure without marking it
+ * stale" (CLAUDE.md).
+ *
+ * This is deliberately a much LOOSER bound than what actually gates a READY
+ * signal — it only answers "is there anything at all worth displaying when
+ * the provider can't be reached," never "is this fresh enough to trade on."
+ * The tight, per-timeframe readiness bound already exists independently in
+ * config/timeframes.ts's `staleAfterMinutes` (M1: 5min, M5: 20min, D1: 3
+ * days, ...), enforced by `freshness()` in domain/clock.ts against the
+ * CANDLE'S OWN timestamp — not by anything here, and not affected by whether
+ * that candle came from a fresh fetch or this fallback. A candle can pass
+ * this loose display bound and still be correctly rejected as DATA_STALE by
+ * that tighter, trade-readiness-relevant check moments later. See
+ * evaluate.test.ts's "stale M1/M5 data cannot produce READY" tests.
+ */
+const STALE_FALLBACK_MAX_AGE_MS: Partial<Record<Timeframe, number>> = {
+  M1: 30 * 60_000,
+  M5: 60 * 60_000,
+  D1: 24 * 60 * 60_000,
+};
+
+interface BaseResult {
+  candles: Candle[];
+  /** True when these candles came from a bounded stale-cache fallback rather than a fresh provider pull. */
+  stale: boolean;
+}
+
+function boundedStaleFallback(
+  cacheKey: string,
+  interval: Timeframe,
+  now: number,
+): Candle[] | undefined {
+  const hit = cache.get(cacheKey);
+  const value = hit?.value as Candle[] | undefined;
+  if (!value?.length) return undefined;
+  const maxAge = STALE_FALLBACK_MAX_AGE_MS[interval] ?? 60 * 60_000;
+  if (now - hit!.at > maxAge) return undefined;
+  return value;
+}
+
+async function loadBase(symbol: string, interval: Timeframe, key: string): Promise<BaseResult> {
   const cacheKey = `td:base:${symbol}:${interval}`;
   const hit = cached<Candle[]>(cacheKey, BASE_TTL[interval] ?? 60_000);
-  if (hit && hit.length) return hit;
-
-  const staleFallback = () => cache.get(cacheKey)?.value as Candle[] | undefined;
+  if (hit && hit.length) return { candles: hit, stale: false };
 
   if (isQuotaExhausted(Date.now())) {
-    const stale = staleFallback();
-    if (stale?.length) return stale;
+    const stale = boundedStaleFallback(cacheKey, interval, Date.now());
+    if (stale?.length) return { candles: stale, stale: true };
     throw new TwelveDataQuotaError(
       "daily credit quota exhausted — skipping request until UTC midnight",
-    );
-  }
-
-  if (!withinBudget(Date.now())) {
-    const stale = staleFallback();
-    if (stale?.length) return stale;
-    throw new TwelveDataBudgetError(
-      `local request budget (${creditsPerMinute()}/min) reached — skipping this cycle`,
     );
   }
 
@@ -300,6 +334,17 @@ async function loadBase(symbol: string, interval: Timeframe, key: string): Promi
 
   let lastError: unknown;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // Re-checked on every attempt, including retries — checking only once
+    // before the loop let a retry record a request without ever confirming
+    // budget remained, which could push the real outgoing count past the
+    // configured per-minute limit exactly during provider instability.
+    if (!withinBudget(Date.now())) {
+      const stale = boundedStaleFallback(cacheKey, interval, Date.now());
+      if (stale?.length) return { candles: stale, stale: true };
+      throw new TwelveDataBudgetError(
+        `local request budget (${creditsPerMinute()}/min) reached — skipping this cycle`,
+      );
+    }
     try {
       recordRequest(Date.now());
       const raw = await getJson(url);
@@ -309,7 +354,7 @@ async function loadBase(symbol: string, interval: Timeframe, key: string): Promi
       const candles = parseBars(raw, spec.digits, TF_MINUTES[interval] * 60_000);
       if (candles.length < 30) throw new Error("not enough history returned");
       store(cacheKey, candles);
-      return candles;
+      return { candles, stale: false };
     } catch (error) {
       lastError = error;
       if (!isRetryable(error) || attempt === MAX_RETRIES) break;
@@ -318,9 +363,10 @@ async function loadBase(symbol: string, interval: Timeframe, key: string): Promi
     }
   }
 
-  // Rate limits and outages must not wipe out prices we already fetched.
-  const stale = staleFallback();
-  if (stale?.length) return stale;
+  // Rate limits and outages must not wipe out prices we already fetched —
+  // but only within the bounded fallback window above.
+  const stale = boundedStaleFallback(cacheKey, interval, Date.now());
+  if (stale?.length) return { candles: stale, stale: true };
   throw lastError;
 }
 
@@ -337,11 +383,14 @@ export async function loadSeries(symbol: string, timeframes: Timeframe[]): Promi
     // M1 for the trigger, M5 for M5–H4, and D1 for D1–MN.
     const needed = new Set<Timeframe>(timeframes.map(baseFor));
     const bases: Partial<Record<Timeframe, Candle[]>> = {};
+    const staleBases = new Set<Timeframe>();
 
     await Promise.all(
       [...needed].map(async (base) => {
         try {
-          bases[base] = await loadBase(symbol, base, key);
+          const result = await loadBase(symbol, base, key);
+          bases[base] = result.candles;
+          if (result.stale) staleBases.add(base);
         } catch (error) {
           notes.push(`${base} candles unavailable (${(error as Error).message}).`);
         }
@@ -366,7 +415,14 @@ export async function loadSeries(symbol: string, timeframes: Timeframe[]): Promi
         continue;
       }
       series[tf] = rolled.slice(-320);
-      realCount += 1;
+      if (staleBases.has(base)) {
+        // Bounded stale-cache fallback (quota/budget exhaustion) — real
+        // candles, but not a fresh pull, so this must not count toward
+        // `realCount`/`real` the way a genuine fetch would.
+        notes.push(`${tf}: served from a cached fallback (provider quota/budget exhausted).`);
+      } else {
+        realCount += 1;
+      }
     }
   }
 
@@ -422,7 +478,7 @@ export async function loadSeries(symbol: string, timeframes: Timeframe[]): Promi
  * request, so a whole watchlist costs one provider call per symbol.
  */
 async function twelveDataQuote(symbol: string, key: string): Promise<Quote | null> {
-  const candles = await loadBase(symbol, "M1", key);
+  const { candles, stale } = await loadBase(symbol, "M1", key);
   const last = candles[candles.length - 1];
   if (!last) return null;
   const spec = specFor(symbol);
@@ -436,9 +492,11 @@ async function twelveDataQuote(symbol: string, key: string): Promise<Quote | nul
     spread: Number(spread.toFixed(spec.digits + 1)),
     timestamp: last.t + TF_MINUTES.M1 * 60_000,
     provider: "TwelveData",
-    kind: "delayed",
-    quality: 85,
-    note: "Real market price from TwelveData (last completed 1-minute candle). Bid/ask are estimated from a typical spread, not your broker's book.",
+    kind: stale ? "stale" : "delayed",
+    quality: stale ? 50 : 85,
+    note: stale
+      ? "Cached fallback price (provider quota/budget exhausted) — may be older than usual. Bid/ask are estimated from a typical spread, not your broker's book."
+      : "Real market price from TwelveData (last completed 1-minute candle). Bid/ask are estimated from a typical spread, not your broker's book.",
   };
 }
 

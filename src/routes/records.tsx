@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
 import { AppShell, Panel } from "@/components/app-shell";
@@ -217,13 +217,22 @@ function RecordsScreen() {
                         {r.dataKind === "demo" ? " · sample data" : ""}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => remove(r.id)}
-                      className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent"
-                    >
-                      Delete
-                    </button>
+                    <div className="flex gap-2">
+                      <Link
+                        to="/chart"
+                        search={{ symbol: r.symbol, signalId: r.id }}
+                        className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent"
+                      >
+                        View snapshot
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => remove(r.id)}
+                        className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
 
                   <p className="mt-2 text-[11px] tabular-nums text-muted-foreground">

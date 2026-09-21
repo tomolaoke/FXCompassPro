@@ -92,6 +92,31 @@ and records why you accepted or rejected each one.
 never combined.** Combining them would hide the difference between what a rule
 did on curated history and what it does in real time.
 
+## Market-closed policy
+
+`evaluateSignal` is the one function both live analysis and backtest replay
+call — there is no separate "backtest mode" strategy path. The market-closed
+gate (readiness capped at WATCH, `MARKET_CLOSED` in `blockReasons`, whenever
+the evaluated instant falls on a broker-closed weekend) therefore applies
+during a backtest exactly as it does live, evaluated against **each bar's own
+historical timestamp**, not the wall-clock time the backtest happens to run
+at.
+
+This is a deliberate choice, not an oversight: a real market was genuinely
+closed at that historical weekend moment too, so a trade generated there could
+not actually have been filled then either. Suppressing it makes the backtest
+slightly *more* conservative near a weekend boundary, not less — the opposite
+direction from a look-ahead bias. `runBacktest`'s regression suite pins this
+(`replay.test.ts`, "market-closed policy") by asserting no trade's `session`
+is ever `CLOSED`.
+
+The gate only checks day-of-week (Saturday/Sunday in the broker's server
+timezone) — it has no holiday calendar. A backtest run across a historical
+market holiday will therefore not suppress trades that a real closed market
+would have. This is a known, accepted gap, not a silent one: fixing it
+properly needs a maintained historical holiday calendar per instrument, which
+is out of scope for the free-tier data this project runs on.
+
 ## Limitations
 
 - Results describe **one historical sample**, not the future.

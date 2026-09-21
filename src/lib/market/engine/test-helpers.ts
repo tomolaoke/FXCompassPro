@@ -27,7 +27,17 @@ const JUMP_BULLISH_CLOSE = 109;
 /** rawK 5 on the final bar — a clean break through 70 from a 75 baseline. */
 const JUMP_BEARISH_CLOSE = 91;
 
-export type SeriesShape = "CONFIRMED_BULLISH" | "CONFIRMED_BEARISH" | "FLAT";
+export type SeriesShape =
+  | "CONFIRMED_BULLISH"
+  | "CONFIRMED_BEARISH"
+  | "FLAT"
+  /**
+   * Same %K reclaim as CONFIRMED_BULLISH, but the final candle closes red
+   * (open above close) instead of green — a real THRESHOLD_RECLAIM_UP event
+   * with no closed-candle price-action confirmation, so it must never be
+   * treated as a trade signal on its own.
+   */
+  | "RECLAIM_ONLY_BULLISH";
 
 function previousBucket(openTime: number, tf: Timeframe, clock: ClockConfig): number {
   return bucketStart(openTime - 1, tf, clock);
@@ -62,6 +72,13 @@ export function buildSeries(
       return isLast
         ? { t, o: 95, h: HIGH, l: LOW, c: JUMP_BEARISH_CLOSE }
         : { t, o: FLAT_BEARISH_CLOSE, h: HIGH, l: LOW, c: FLAT_BEARISH_CLOSE };
+    }
+    if (shape === "RECLAIM_ONLY_BULLISH") {
+      // Identical %K path to CONFIRMED_BULLISH (same close), but o > c makes
+      // the closing candle red — the reclaim is real, the confirmation isn't.
+      return isLast
+        ? { t, o: HIGH, h: HIGH, l: LOW, c: JUMP_BULLISH_CLOSE }
+        : { t, o: FLAT_BULLISH_CLOSE, h: HIGH, l: LOW, c: FLAT_BULLISH_CLOSE };
     }
     // FLAT: rawK pinned at 25 throughout — no cross, no reclaim, no signal.
     return { t, o: FLAT_BULLISH_CLOSE, h: HIGH, l: LOW, c: FLAT_BULLISH_CLOSE };

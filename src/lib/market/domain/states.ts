@@ -100,8 +100,8 @@ export function wasEvaluated(state: TimeframeState): boolean {
  * The brand makes that enforceable: engine code cannot construct this value
  * without importing the factory below, which lives beside the config reader and
  * is the only sanctioned source. This is the guard against the original defect,
- * where "not used" was shown for timeframes that actually disagreed or had no
- * data.
+ * where a disabled-looking label was shown for timeframes that actually
+ * disagreed or had no data.
  */
 declare const ConfigReaderOnly: unique symbol;
 export type NotConfiguredToken = { readonly [ConfigReaderOnly]: true };
@@ -409,6 +409,7 @@ export const BLOCK_REASONS = [
   "NO_STRUCTURE_CONFIRMATION",
   "DAILY_RISK_LIMIT",
   "MANUAL_MODE",
+  "MARKET_CLOSED",
 ] as const;
 
 export type BlockReason = (typeof BLOCK_REASONS)[number];
@@ -431,6 +432,7 @@ export const BLOCK_REASON_LABEL: Record<BlockReason, string> = {
   NO_STRUCTURE_CONFIRMATION: "Price action has not confirmed the turn",
   DAILY_RISK_LIMIT: "Your maximum daily risk has already been committed",
   MANUAL_MODE: "Manual mode never issues a trade permission",
+  MARKET_CLOSED: "The market is closed — no new trade-ready signal can be confirmed",
 };
 
 // ─── Signal lifecycle ────────────────────────────────────────────────────────

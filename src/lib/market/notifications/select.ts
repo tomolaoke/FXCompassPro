@@ -91,3 +91,23 @@ export function selectNotifications(
   }
   return events;
 }
+
+/**
+ * Symbols whose "previous label" bookkeeping may advance after this poll.
+ *
+ * A symbol suppressed this poll (quiet hours globally, or an individual
+ * mute) must NOT have its stored label advanced to the current one — doing
+ * so would make a transition that occurred while suppressed permanently
+ * invisible, since the next eligible poll would then see "no change" (or,
+ * for a READY label, `wasAlreadyReady`) instead of the real transition into
+ * it. Leaving the old label in place means that transition is still
+ * detected as new once quiet hours end or the symbol is unmuted.
+ */
+export function eligibleForLabelUpdate(
+  rows: readonly NotifiableRow[],
+  settings: NotificationSettings,
+  localHour: number,
+): string[] {
+  if (isQuietHour(localHour, settings.quietHoursStart, settings.quietHoursEnd)) return [];
+  return rows.filter((row) => !settings.mutedSymbols.has(row.symbol)).map((row) => row.symbol);
+}

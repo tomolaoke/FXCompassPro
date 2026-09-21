@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CLOCK_CONFIG } from "../domain/clock";
+import { bucketStart, DEFAULT_CLOCK_CONFIG } from "../domain/clock";
 import { DEFAULT_STRATEGY_CONFIG, strategyVersion, type StrategyConfig } from "../config/strategy";
-import { ALL_TIMEFRAMES, type Timeframe } from "../config/timeframes";
+import { ALL_TIMEFRAMES, timeframeDef, type Timeframe } from "../config/timeframes";
 import type { Candle, Quote, RiskSettings } from "../types";
 import { evaluateSignal, type EvaluateInput } from "./evaluate";
 import { buildSeries, FIXED_NOW, type SeriesShape } from "./test-helpers";
@@ -202,6 +202,181 @@ describe("THE REGRESSION LOCK — short-term bullish, higher timeframes bearish"
   it("still reports the heuristic score as a heuristic, never a probability", () => {
     const signal = evaluateSignal(conflictedInput());
     expect(signal.score.isHeuristic).toBe(true);
+  });
+});
+
+describe("BLOCKER FIX — execution trigger requires a confirmed event", () => {
+  it("never reaches READY off a bare threshold reclaim with no closed-candle confirmation", () => {
+    // M1 gets a real Stochastic event (a genuine reclaim through the oversold
+    // level) but the closing candle is red, so it is NOT a CONFIRMED_BULLISH
+    // event — only THRESHOLD_RECLAIM_UP, which must never trigger READY.
+    const signal = evaluateSignal(
+      baseInput({ series: mixedSeries({ M1: "RECLAIM_ONLY_BULLISH" }, "CONFIRMED_BULLISH") }),
+    );
+    const m1 = signal.timeframes.find((t) => t.timeframe === "M1")!;
+    expect(m1.stochastic?.event).toBe("THRESHOLD_RECLAIM_UP");
+    expect(signal.readiness).not.toBe("READY");
+    expect(signal.label).not.toContain("READY");
+  });
+
+  it("still reaches READY when the trigger timeframe is genuinely CONFIRMED (control)", () => {
+    const signal = evaluateSignal(baseInput());
+    expect(signal.readiness).toBe("READY");
+  });
+});
+
+describe("BLOCKER FIX — missing M5 entry confirmation blocks READY", () => {
+  it("holds at SETUP when the entry-confirmation timeframe has not confirmed", () => {
+    const signal = evaluateSignal(
+      baseInput({ series: mixedSeries({ M5: "FLAT" }, "CONFIRMED_BULLISH") }),
+    );
+    expect(signal.readiness).not.toBe("READY");
+  });
+});
+
+describe("BLOCKER FIX — an open M1 candle blocks READY", () => {
+  it("holds at SETUP when the execution-trigger candle has not closed", () => {
+    const minBars = timeframeDef("M1").minBars;
+    // One bar short of the minimum, so trimming the still-open final candle
+    // (below) leaves too little closed history — exactly readTimeframe's
+    // CANDLE_OPEN path.
+    const closed = buildSeries("M1", "CONFIRMED_BULLISH", FIXED_NOW, CLOCK, minBars - 1);
+    const openCandle: Candle = {
+      t: bucketStart(FIXED_NOW, "M1", CLOCK),
+      o: 100,
+      h: 110,
+      l: 90,
+      c: 109,
+    };
+    const series = { ...uniformSeries("CONFIRMED_BULLISH"), M1: [...closed, openCandle] };
+
+    const signal = evaluateSignal(baseInput({ series }));
+    const m1 = signal.timeframes.find((t) => t.timeframe === "M1")!;
+    expect(m1.state).toBe("CANDLE_OPEN");
+    expect(signal.readiness).not.toBe("READY");
+  });
+});
+
+describe("BLOCKER FIX — backtest/live look-ahead: computeLevels never reads an open execution candle", () => {
+  it("produces identical levels whether or not an open, extreme candle is appended to the execution timeframe", () => {
+    // pickExecutionTimeframe chooses M15 first (fastest OPERATIONAL timeframe
+    // with data) under the default role config used by baseInput/TEST_CONFIG.
+    const baseline = evaluateSignal(baseInput());
+
+    const spike: Candle = {
+      t: bucketStart(FIXED_NOW, "M15", CLOCK),
+      o: 100,
+      h: 10_000,
+      l: -10_000,
+      c: 5_000,
+    };
+    const withOpenSpike = {
+      ...uniformSeries("CONFIRMED_BULLISH"),
+      M15: [...uniformSeries("CONFIRMED_BULLISH").M15!, spike],
+    };
+    const withSpike = evaluateSignal(baseInput({ series: withOpenSpike }));
+
+    // If the open spike leaked into computeLevels, ATR/structural high-low
+    // would blow out and every one of these would differ from the baseline.
+    expect(withSpike.entryZone).toEqual(baseline.entryZone);
+    expect(withSpike.stopLoss).toEqual(baseline.stopLoss);
+    expect(withSpike.invalidationLevel).toEqual(baseline.invalidationLevel);
+    expect(withSpike.takeProfit1).toEqual(baseline.takeProfit1);
+    expect(withSpike.takeProfit2).toEqual(baseline.takeProfit2);
+    expect(withSpike.takeProfit3).toEqual(baseline.takeProfit3);
+    expect(withSpike.readiness).toBe("READY");
+  });
+});
+
+describe("BLOCKER FIX — a data problem on one sibling must not read as NEUTRAL", () => {
+  it("reports UNAVAILABLE, not NEUTRAL, when W1 is stale but MN agrees", () => {
+    // MN bullish (AGREEING); W1 present but stale (past its freshness
+    // limit) — a real data problem, not a genuine neutral reading.
+    const w1Series = buildSeries("W1", "CONFIRMED_BULLISH", FIXED_NOW, CLOCK);
+    const staleAgeMs = (timeframeDef("W1").staleAfterMinutes + 60) * 60_000;
+    const staleW1 = w1Series.map((c) => ({ ...c, t: c.t - staleAgeMs }));
+    const series = { ...uniformSeries("CONFIRMED_BULLISH"), W1: staleW1 };
+
+    const signal = evaluateSignal(baseInput({ series }));
+    const w1 = signal.timeframes.find((t) => t.timeframe === "W1")!;
+    expect(w1.state).toBe("DATA_STALE");
+    expect(signal.broadContextRelation).toBe("UNAVAILABLE");
+    expect(signal.broadContextRelation).not.toBe("NEUTRAL");
+    expect(signal.notFullyAlignedReason).toContain("unavailable");
+  });
+});
+
+describe("readiness freshness — separate from, and tighter than, any display/cache bound", () => {
+  // config/timeframes.ts's staleAfterMinutes (M1: 5min, M5: 20min) is the
+  // ONLY thing that decides whether a candle is fresh enough to feed a READY
+  // signal — it is independent of, and much tighter than, the display-only
+  // stale-cache-fallback bound in market.server.ts (M1: 30min, M5: 1h). This
+  // proves that mechanism actually blocks READY end-to-end.
+  it("never reaches READY when M1's last closed candle is past its 5-minute readiness limit", () => {
+    const staleAgeMs = (timeframeDef("M1").staleAfterMinutes + 1) * 60_000;
+    const m1 = buildSeries("M1", "CONFIRMED_BULLISH", FIXED_NOW, CLOCK).map((c) => ({
+      ...c,
+      t: c.t - staleAgeMs,
+    }));
+    const signal = evaluateSignal(
+      baseInput({ series: { ...uniformSeries("CONFIRMED_BULLISH"), M1: m1 } }),
+    );
+    const m1Reading = signal.timeframes.find((t) => t.timeframe === "M1")!;
+    expect(m1Reading.state).toBe("DATA_STALE");
+    expect(signal.readiness).not.toBe("READY");
+  });
+
+  it("never reaches READY when M5's last closed candle is past its 20-minute readiness limit", () => {
+    const staleAgeMs = (timeframeDef("M5").staleAfterMinutes + 1) * 60_000;
+    const m5 = buildSeries("M5", "CONFIRMED_BULLISH", FIXED_NOW, CLOCK).map((c) => ({
+      ...c,
+      t: c.t - staleAgeMs,
+    }));
+    const signal = evaluateSignal(
+      baseInput({ series: { ...uniformSeries("CONFIRMED_BULLISH"), M5: m5 } }),
+    );
+    const m5Reading = signal.timeframes.find((t) => t.timeframe === "M5")!;
+    expect(m5Reading.state).toBe("DATA_STALE");
+    expect(signal.readiness).not.toBe("READY");
+  });
+});
+
+describe("market closed", () => {
+  /** A Saturday — broker server week is Mon 00:00 to Fri 24:00, so this is closed. */
+  const CLOSED_NOW = Date.UTC(2025, 6, 19, 12, 0, 0);
+
+  function closedSeries(shape: SeriesShape): Partial<Record<Timeframe, Candle[]>> {
+    const series: Partial<Record<Timeframe, Candle[]>> = {};
+    for (const tf of ALL_TIMEFRAMES) series[tf] = buildSeries(tf, shape, CLOSED_NOW, CLOCK);
+    return series;
+  }
+
+  it("holds an otherwise-fully-aligned setup at WATCH while the market is closed", () => {
+    const signal = evaluateSignal(
+      baseInput({
+        now: CLOSED_NOW,
+        series: closedSeries("CONFIRMED_BULLISH"),
+        quote: { ...quote(), timestamp: CLOSED_NOW },
+      }),
+    );
+    expect(signal.session).toBe("CLOSED");
+    expect(signal.readiness).not.toBe("READY");
+    expect(signal.readiness).toBe("WATCH");
+    expect(signal.label).not.toContain("READY");
+    expect(signal.blockReasons).toContain("MARKET_CLOSED");
+  });
+
+  it("still reports direction and higher-timeframe bias while closed — never hides them", () => {
+    const signal = evaluateSignal(
+      baseInput({
+        now: CLOSED_NOW,
+        series: closedSeries("CONFIRMED_BULLISH"),
+        quote: { ...quote(), timestamp: CLOSED_NOW },
+      }),
+    );
+    expect(signal.direction).toBe("BUY");
+    expect(signal.shortTermDirection).toBe("BULLISH");
+    expect(signal.higherTimeframeBias).toBe("BULLISH");
   });
 });
 

@@ -13,7 +13,12 @@
  * notifications work when they cannot.
  */
 import { useEffect, useRef } from "react";
-import { selectNotifications, type NotifiableRow, type NotificationSettings } from "./select";
+import {
+  eligibleForLabelUpdate,
+  selectNotifications,
+  type NotifiableRow,
+  type NotificationSettings,
+} from "./select";
 import type { SignalLabel } from "../domain/states";
 
 export type NotificationPermissionState = "unsupported" | "default" | "granted" | "denied";
@@ -55,8 +60,15 @@ export function useSignalNotifications(
       }
     }
 
+    // Only symbols actually eligible this poll may advance their stored
+    // label — a suppressed symbol (quiet hours, or muted) keeps its old
+    // label so a transition that happened while suppressed is still caught
+    // once it becomes eligible again. See eligibleForLabelUpdate's doc.
+    const eligible = new Set(eligibleForLabelUpdate(rows, settings, localHour));
     const next = new Map(previousLabels.current);
-    for (const row of rows) next.set(row.symbol, row.label);
+    for (const row of rows) {
+      if (eligible.has(row.symbol)) next.set(row.symbol, row.label);
+    }
     previousLabels.current = next;
   }, [rows, settings, enabled]);
 }

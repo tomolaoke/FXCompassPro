@@ -7,6 +7,7 @@ import {
   requiresCountertrendWarning,
   TIMEFRAME_STATE_LABEL,
 } from "@/lib/market/domain/states";
+import { formatAge, SESSION_LABEL } from "@/lib/market/domain/clock";
 import { fmtPrice } from "@/lib/market/instruments";
 import type { EngineSignal, TimeframeReading } from "@/lib/market/engine/types";
 import type { Quote } from "@/lib/market/types";
@@ -88,6 +89,13 @@ export function SignalCard({
           {validCount}/{totalCount} timeframes valid
         </p>
       </div>
+
+      {signal.session === "CLOSED" && (
+        <p className="rounded-md border border-warn/40 bg-warn/10 p-2 text-[11px] font-medium text-warn">
+          Market closed — no new trade-ready signal is issued until it reopens. Anything shown here
+          is context, not an active entry.
+        </p>
+      )}
 
       {notes && notes.length > 0 && (
         <ul className="space-y-1 rounded-md border border-warn/40 bg-warn/10 p-2 text-[11px] text-warn">
@@ -202,7 +210,7 @@ export function SignalCard({
         )}
         <p className="mt-2 text-muted-foreground">Trigger: {signal.triggerCondition}</p>
         <p className="text-muted-foreground">Invalidation: {signal.invalidationCondition}</p>
-        <p className="text-muted-foreground">Session: {signal.session.replace(/_/g, " ")}</p>
+        <p className="text-muted-foreground">Session: {SESSION_LABEL[signal.session]}</p>
         <p className="mt-2 text-[10px] text-muted-foreground">
           Strategy version: {signal.strategyVersion}
         </p>
@@ -211,7 +219,7 @@ export function SignalCard({
       <div className="flex flex-wrap gap-2">
         <Link
           to="/chart"
-          search={{ symbol: signal.symbol }}
+          search={{ symbol: signal.symbol, signalId: undefined }}
           className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-accent"
         >
           Chart
@@ -240,20 +248,38 @@ export function SignalCard({
   );
 }
 
+/** Short chip text for a data-problem state — distinct per problem, never a bare dash. */
+const PROBLEM_CODE: Record<string, string> = {
+  DATA_MISSING: "MISS",
+  DATA_STALE: "STALE",
+  DATA_DELAYED: "DELAY",
+  DATA_INVALID: "BAD",
+  CANDLE_OPEN: "OPEN",
+};
+
 function TimeframeChip({ reading }: { reading: TimeframeReading }) {
   const stateLabel = TIMEFRAME_STATE_LABEL[reading.state];
-  const tone =
-    reading.relation === "AGREEING"
+  const problem = isDataProblem(reading.state);
+  const tone = problem
+    ? "border-warn/50 bg-warn/10 text-warn"
+    : reading.relation === "AGREEING"
       ? "border-bull/50 bg-bull/10 text-bull"
       : reading.relation === "CONFLICTING"
         ? "border-bear/50 bg-bear/10 text-bear"
         : "border-border bg-card text-muted-foreground";
   const k = reading.stochastic?.k;
+  // A stale/delayed reading must show its exact age inline, not just on
+  // hover — "STALE" alone tells you something is wrong but not how wrong.
+  const showsAge =
+    (reading.state === "DATA_STALE" || reading.state === "DATA_DELAYED") &&
+    reading.dataAgeMs !== null;
+  const ageText = showsAge ? formatAge(reading.dataAgeMs!) : null;
   const title = [
     stateLabel,
     reading.relation !== "NOT_APPLICABLE" ? reading.relation.toLowerCase() : null,
     reading.isSynthetic ? "sample data — not real" : null,
     k !== null && k !== undefined ? `K ${k.toFixed(1)}` : null,
+    ageText ? `${ageText} old` : null,
     reading.explanation,
   ]
     .filter(Boolean)
@@ -263,9 +289,12 @@ function TimeframeChip({ reading }: { reading: TimeframeReading }) {
     <span
       className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${tone} ${reading.isSynthetic ? "opacity-60" : ""}`}
       title={title}
-      aria-label={`${reading.timeframe}: ${stateLabel}${reading.relation === "CONFLICTING" ? " (conflicting)" : ""}`}
+      aria-label={`${reading.timeframe}: ${stateLabel}${reading.relation === "CONFLICTING" ? " (conflicting)" : ""}${ageText ? `, ${ageText} old` : ""}`}
     >
-      {reading.timeframe} {k === null || k === undefined ? "—" : k.toFixed(0)}
+      {reading.timeframe}{" "}
+      {problem
+        ? `${PROBLEM_CODE[reading.state]}${ageText ? ` ${ageText}` : ""}`
+        : (k?.toFixed(0) ?? "—")}
     </span>
   );
 }

@@ -83,18 +83,51 @@ export interface UpdateOutcomeInput {
   rMultiple?: number | null;
 }
 
+export class SignalNotFoundError extends Error {
+  constructor(id: string) {
+    super(`No signal found with id ${id}`);
+  }
+}
+
 /**
  * Updates only the outcome fields of a previously recorded signal — the
  * result of a user later marking a paper-traded idea as won, lost or
  * abandoned. Every other column is immutable once written; the audit trail
  * itself is never overwritten.
+ *
+ * Rejects an id that does not match any row, rather than silently succeeding
+ * with zero rows updated — this app has no per-user account model to check
+ * ownership against (a single-operator tool), so this is the check that is
+ * actually possible today: a caller cannot silently "update" a signal that
+ * was never recorded, or one that was deleted. Real multi-user ownership
+ * (verifying the caller is the user who recorded this signal) needs an
+ * authentication/authorization design this codebase does not have yet — see
+ * docs/limitations.md.
  */
 export async function updateSignalOutcome(input: UpdateOutcomeInput): Promise<void> {
   const db = await getDb();
-  await db
+  const result = await db
     .update(schema.signals)
     .set({ outcome: input.outcome, rMultiple: input.rMultiple ?? null })
-    .where(eq(schema.signals.id, input.id));
+    .where(eq(schema.signals.id, input.id))
+    .returning({ id: schema.signals.id });
+  if (result.length === 0) throw new SignalNotFoundError(input.id);
+}
+
+/** The single persisted signal a chart/plan view can pin itself to, so it renders the exact evidence that was recorded rather than a freshly recomputed one. Returns null for an unknown id. */
+export async function getSignalById(id: string) {
+  const db = await getDb();
+  const rows = await db.select().from(schema.signals).where(eq(schema.signals.id, id)).limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    ...row,
+    timeframes: JSON.parse(row.timeframesJson) as TimeframeReading[],
+    reasons: JSON.parse(row.reasonsJson) as string[],
+    warnings: JSON.parse(row.warningsJson) as string[],
+    blockReasons: JSON.parse(row.blockReasonsJson) as string[],
+    calculationErrors: JSON.parse(row.calculationErrorsJson) as string[],
+  };
 }
 
 export interface SignalHistoryQuery {

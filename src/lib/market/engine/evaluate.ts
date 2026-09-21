@@ -23,7 +23,7 @@ import {
   orderBlocks,
   structureShift,
 } from "../structure";
-import { sessionAt, type ClockConfig, DEFAULT_CLOCK_CONFIG } from "../domain/clock";
+import { isCandleClosed, sessionAt, type ClockConfig, DEFAULT_CLOCK_CONFIG } from "../domain/clock";
 import {
   allowsCountertrend,
   broadContextTimeframes,
@@ -114,7 +114,13 @@ function aggregateRelation(readings: readonly TimeframeReading[]): BroadContextR
   // prominently visible, not averaged away by an agreeing sibling.
   if (conflicting > 0) return "CONFLICTING";
   if (agreeing > 0 && agreeing === readings.length) return "ALIGNED";
-  if (dataProblem > 0 && agreeing === 0) return "UNAVAILABLE";
+  // A genuine data problem (missing/stale/delayed/invalid/open) on any
+  // sibling must surface as UNAVAILABLE even when another sibling agrees —
+  // an agreeing MN does not make a stale W1 "no opinion" (NEUTRAL); it makes
+  // the broad picture unverified. Only readings with no data problem at all
+  // (a real NEUTRAL Stochastic state, or no configured timeframes) fall
+  // through to NEUTRAL.
+  if (dataProblem > 0) return "UNAVAILABLE";
   return "NEUTRAL";
 }
 
@@ -237,6 +243,12 @@ export function evaluateSignal(input: EvaluateInput): EngineSignal {
     }
   }
 
+  // A closed market (weekend, broker server time) has no live price action to
+  // confirm entry or execution against — holding at WATCH rather than issuing
+  // a trade-ready signal that could not actually be filled right now.
+  const session = sessionAt(now, clock);
+  const marketClosed = session === "CLOSED";
+
   // ── readiness ladder ───────────────────────────────────────────────────────
   let readiness: Readiness = "NONE";
   let terminal: "INSUFFICIENT_DATA" | "DATA_QUALITY_ERROR" | "INVALID" | undefined;
@@ -254,17 +266,35 @@ export function evaluateSignal(input: EvaluateInput): EngineSignal {
       warnings.push("D1/H4 disagree with the short-term direction — held at WATCH.");
     }
 
+    // STRICT is documented (config/strategy.ts) to refuse on any inconclusive
+    // reading and any provisional candle too, not just outright data
+    // problems — isDataProblem alone excludes CANDLE_OPEN/INCONCLUSIVE.
     const strictBlocksProgress =
       config.permissionMode === "STRICT" &&
-      (broadContextRelation === "CONFLICTING" || timeframes.some((r) => isDataProblem(r.state)));
+      (broadContextRelation === "CONFLICTING" ||
+        timeframes.some(
+          (r) => isDataProblem(r.state) || r.state === "CANDLE_OPEN" || r.state === "INCONCLUSIVE",
+        ));
     if (strictBlocksProgress) {
       blockReasons.push("NOT_FULLY_ALIGNED");
     }
 
-    if (!primaryConflictBlocksProgress && !strictBlocksProgress && !countertrendBlocked) {
+    if (marketClosed) {
+      blockReasons.push("MARKET_CLOSED");
+      warnings.push(
+        "Market is closed (weekend, broker server time) — held at WATCH; no new trade-ready signal until it reopens.",
+      );
+    }
+
+    if (
+      !primaryConflictBlocksProgress &&
+      !strictBlocksProgress &&
+      !countertrendBlocked &&
+      !marketClosed
+    ) {
       // ── SETUP: location + structure must confirm ────────────────────────
       const execTf = pickExecutionTimeframe(config, input.series);
-      const exec = execTf ? (input.series[execTf] ?? []) : [];
+      const exec = closedExecCandles(execTf, input.series, now, clock);
       const levels = exec.length
         ? computeLevels(exec, config, price, finalDirection, input.symbol)
         : null;
@@ -287,14 +317,18 @@ export function evaluateSignal(input: EvaluateInput): EngineSignal {
         const triggerReading = triggerTf ? readingOf(triggerTf) : null;
 
         const entryConfirms = entryReading?.relation === "AGREEING";
+        // A trigger requires a genuinely CONFIRMED_BULLISH/CONFIRMED_BEARISH
+        // event, not any non-neutral reading — a bare crossover, curl or
+        // threshold reclaim is a real event but "not a trade signal on its
+        // own" (see docs/strategy-rules.md and isTradeSignalEvent). Every
+        // CONFIRMED_* event already carries a directional state, so relation
+        // is always meaningfully AGREEING/CONFLICTING here — there is no
+        // direction-less case left to fall back on.
         const triggerFires =
           triggerReading !== null &&
           triggerReading.stochastic !== null &&
-          triggerReading.stochastic.event !== "NEUTRAL" &&
-          triggerReading.stochastic.event !== "INCONCLUSIVE" &&
-          (directionFromState(triggerReading.state) !== null
-            ? triggerReading.relation === "AGREEING"
-            : true);
+          isTradeSignalEvent(triggerReading.stochastic.event) &&
+          triggerReading.relation === "AGREEING";
 
         if (!entryReading || !entryConfirms) {
           warnings.push(
@@ -356,7 +390,7 @@ export function evaluateSignal(input: EvaluateInput): EngineSignal {
 
   // ── levels for display (recomputed once, at whatever readiness reached) ───
   const execTf = pickExecutionTimeframe(config, input.series);
-  const exec = execTf ? (input.series[execTf] ?? []) : [];
+  const exec = closedExecCandles(execTf, input.series, now, clock);
   const levels =
     readiness === "SETUP" || readiness === "READY"
       ? computeLevels(exec, config, price, finalDirection ?? "BUY", input.symbol)
@@ -435,7 +469,7 @@ export function evaluateSignal(input: EvaluateInput): EngineSignal {
     triggerCondition: levels?.trigger ?? "Waiting for the higher-timeframe stack to line up.",
     invalidationCondition:
       levels?.invalidationCondition ?? "No setup yet, so nothing to invalidate.",
-    session: sessionAt(now, clock),
+    session,
     newsRisk: input.newsRisk ?? null,
     brokerComparison,
     dataTimestamp: input.quote.timestamp,
@@ -455,6 +489,28 @@ function pickExecutionTimeframe(
     .reverse()
     .concat(config.roles.ENTRY_CONFIRMATION);
   return candidates.find((tf) => (series[tf]?.length ?? 0) > 0) ?? null;
+}
+
+/**
+ * The execution-timeframe candles `computeLevels` may see — trimmed to
+ * closed candles only, exactly like `readTimeframe` trims before computing a
+ * state. Without this, entry zone, stop-loss, invalidation and every target
+ * would be free to read a candle that has not closed yet: in a backtest that
+ * candle's high/low/close were derived from base bars the replay has not
+ * reached yet, which is look-ahead; live, it is a value that can still move
+ * before the bar closes.
+ */
+function closedExecCandles(
+  execTf: Timeframe | null,
+  series: Partial<Record<Timeframe, Candle[]>>,
+  now: number,
+  clock: ClockConfig,
+): Candle[] {
+  if (!execTf) return [];
+  const candles = series[execTf] ?? [];
+  if (candles.length === 0) return candles;
+  const last = candles[candles.length - 1]!;
+  return isCandleClosed(last.t, execTf, now, clock) ? candles : candles.slice(0, -1);
 }
 
 interface LevelResult {
