@@ -298,13 +298,29 @@ export const updateSignalOutcomeFn = createServerFn({ method: "POST" })
         .parse(input),
   )
   .handler(async ({ data }) => {
-    const { updateSignalOutcome } = await import("../db/signals.server");
-    await updateSignalOutcome({
-      id: data.id,
-      outcome: data.outcome,
-      rMultiple: data.rMultiple ?? null,
-    });
+    const { updateSignalOutcome, SignalNotFoundError } = await import("../db/signals.server");
+    try {
+      await updateSignalOutcome({
+        id: data.id,
+        outcome: data.outcome,
+        rMultiple: data.rMultiple ?? null,
+      });
+    } catch (error) {
+      if (error instanceof SignalNotFoundError) {
+        return { ok: false, error: "not_found" as const };
+      }
+      throw error;
+    }
     return { ok: true };
+  });
+
+export const getSignalByIdFn = createServerFn({ method: "POST" })
+  .inputValidator((input: { id: string }) =>
+    z.object({ id: z.string().min(1).max(64) }).parse(input),
+  )
+  .handler(async ({ data }) => {
+    const { getSignalById } = await import("../db/signals.server");
+    return getSignalById(data.id);
   });
 
 /**

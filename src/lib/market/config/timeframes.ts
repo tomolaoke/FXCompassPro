@@ -37,8 +37,14 @@ export interface TimeframeDefinition {
    */
   readonly minBars: number;
   /**
-   * Age past which data is considered stale, in minutes. Generous multiples of
-   * the bar duration: a weekly candle that is two hours old is perfectly fresh.
+   * Age past which data is considered too old to feed a READY signal, in
+   * minutes — enforced by `freshness()` in domain/clock.ts against the
+   * candle's own timestamp, independent of and much tighter than
+   * market.server.ts's separate stale-cache-*display* fallback bound (see
+   * that file's STALE_FALLBACK_MAX_AGE_MS). This is the number that actually
+   * decides trade-readiness freshness; `freshness()` excludes time the market
+   * was closed (weekends) from the comparison, so these can stay tight
+   * without every higher timeframe falsely reading DATA_STALE every Monday.
    */
   readonly staleAfterMinutes: number;
   /** How long a signal built on this timeframe stays valid, in minutes. */
@@ -56,7 +62,7 @@ export const TIMEFRAMES: Record<Timeframe, TimeframeDefinition> = {
     bucket: "INTRADAY",
     baseSeries: "1min",
     minBars: 60,
-    staleAfterMinutes: 5,
+    staleAfterMinutes: 2,
     signalExpiryMinutes: 15,
   },
   M5: {
@@ -66,7 +72,7 @@ export const TIMEFRAMES: Record<Timeframe, TimeframeDefinition> = {
     bucket: "INTRADAY",
     baseSeries: "5min",
     minBars: 60,
-    staleAfterMinutes: 20,
+    staleAfterMinutes: 10,
     signalExpiryMinutes: 45,
   },
   M15: {
@@ -76,7 +82,7 @@ export const TIMEFRAMES: Record<Timeframe, TimeframeDefinition> = {
     bucket: "INTRADAY",
     baseSeries: "5min",
     minBars: 60,
-    staleAfterMinutes: 60,
+    staleAfterMinutes: 20,
     signalExpiryMinutes: 120,
   },
   M30: {
@@ -86,7 +92,7 @@ export const TIMEFRAMES: Record<Timeframe, TimeframeDefinition> = {
     bucket: "INTRADAY",
     baseSeries: "5min",
     minBars: 60,
-    staleAfterMinutes: 120,
+    staleAfterMinutes: 40,
     signalExpiryMinutes: 240,
   },
   H1: {
@@ -96,7 +102,7 @@ export const TIMEFRAMES: Record<Timeframe, TimeframeDefinition> = {
     bucket: "INTRADAY",
     baseSeries: "1h",
     minBars: 60,
-    staleAfterMinutes: 240,
+    staleAfterMinutes: 90,
     signalExpiryMinutes: 480,
   },
   H4: {
@@ -106,7 +112,7 @@ export const TIMEFRAMES: Record<Timeframe, TimeframeDefinition> = {
     bucket: "INTRADAY",
     baseSeries: "1h",
     minBars: 60,
-    staleAfterMinutes: 960,
+    staleAfterMinutes: 360, // 6 hours
     signalExpiryMinutes: 1440,
   },
   D1: {
@@ -116,8 +122,12 @@ export const TIMEFRAMES: Record<Timeframe, TimeframeDefinition> = {
     bucket: "DAILY",
     baseSeries: "1day",
     minBars: 60,
-    // Allows for a full weekend plus a public holiday without crying stale.
-    staleAfterMinutes: 4320,
+    // 26 hours — one full day plus a small buffer. Safe at this tightness
+    // specifically because freshness() now excludes weekend closure from the
+    // comparison; without that, this would falsely read DATA_STALE for most
+    // of every Monday, since the last closed D1 candle before the weekend is
+    // Friday's.
+    staleAfterMinutes: 1560,
     signalExpiryMinutes: 4320,
   },
   W1: {
@@ -127,7 +137,7 @@ export const TIMEFRAMES: Record<Timeframe, TimeframeDefinition> = {
     bucket: "WEEKLY",
     baseSeries: "1day",
     minBars: 40,
-    staleAfterMinutes: 20160,
+    staleAfterMinutes: 11520, // 8 days
     signalExpiryMinutes: 20160,
   },
   MN: {
@@ -137,7 +147,7 @@ export const TIMEFRAMES: Record<Timeframe, TimeframeDefinition> = {
     bucket: "MONTHLY",
     baseSeries: "1day",
     minBars: 36,
-    staleAfterMinutes: 86400,
+    staleAfterMinutes: 89280, // 62 days
     signalExpiryMinutes: 43200,
   },
 };

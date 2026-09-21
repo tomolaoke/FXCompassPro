@@ -1,7 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useState } from "react";
-import { getEngineSignalRun, getQuotes, getSeries, getSignalRun } from "./market.functions";
+import {
+  getEngineSignalRun,
+  getQuotes,
+  getSeries,
+  getSignalByIdFn,
+  getSignalRun,
+} from "./market.functions";
 import type { AppSettings, Quote, Timeframe } from "./types";
 import type { EngineSignal } from "./engine/types";
 
@@ -158,6 +164,21 @@ export function useQuotes(symbols: string[]) {
     queryFn: () => fetchQuotes({ data: { symbols } }),
     refetchInterval: 60_000,
     enabled: symbols.length > 0,
+  });
+}
+
+/**
+ * The exact evidence and levels stored for one previously recorded signal —
+ * not recomputed. A chart pinned to a signalId must show what actually
+ * produced that recorded plan, not whatever the live engine says right now
+ * (price, indicators and even the strategy version can all have moved on).
+ */
+export function useSignalById(id: string | undefined) {
+  const fetchSignal = useServerFn(getSignalByIdFn);
+  return useQuery({
+    queryKey: ["signal-by-id", id],
+    queryFn: () => fetchSignal({ data: { id: id! } }),
+    enabled: Boolean(id),
   });
 }
 

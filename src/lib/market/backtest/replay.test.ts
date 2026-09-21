@@ -235,6 +235,25 @@ describe("runBacktest — the look-ahead guarantee", () => {
   }, 20_000);
 });
 
+describe("runBacktest — market-closed policy (documented, intentional)", () => {
+  // evaluateSignal is shared between live analysis and backtest replay, so the
+  // market-closed gate added for live trading (readiness capped at WATCH
+  // when the bar's own historical timestamp falls on a broker-closed
+  // weekend) applies here too. This is a deliberate choice, not an oversight
+  // — see docs/backtesting.md "Market-closed policy": a real market was
+  // genuinely closed at that historical moment, so a trade could not
+  // actually have been filled then either. This test pins that choice so a
+  // future change to the gate is a visible decision, not a silent one.
+  it("never opens a trade whose signal session is CLOSED", () => {
+    const stepMs = timeframeDef("M15").minutes * 60_000;
+    // 2024-01-05 is a Friday; the walk runs long enough to cross Sat/Sun.
+    const startT = Date.UTC(2024, 0, 5, 12, 0, 0);
+    const spanningWeekend = randomWalk(500, 99, startT, stepMs);
+    const run = runBacktest(backtestConfig(spanningWeekend));
+    expect(run.trades.every((t) => t.session !== "CLOSED")).toBe(true);
+  });
+});
+
 describe("runBacktest — trade bookkeeping", () => {
   it("expires an unfilled signal after maxBarsToFill without recording a trade outcome", () => {
     const stepMs = timeframeDef("M15").minutes * 60_000;

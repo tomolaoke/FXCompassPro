@@ -100,8 +100,8 @@ export function wasEvaluated(state: TimeframeState): boolean {
  * The brand makes that enforceable: engine code cannot construct this value
  * without importing the factory below, which lives beside the config reader and
  * is the only sanctioned source. This is the guard against the original defect,
- * where "not used" was shown for timeframes that actually disagreed or had no
- * data.
+ * where a disabled-looking label was shown for timeframes that actually
+ * disagreed or had no data.
  */
 declare const ConfigReaderOnly: unique symbol;
 export type NotConfiguredToken = { readonly [ConfigReaderOnly]: true };

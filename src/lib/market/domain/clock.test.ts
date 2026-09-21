@@ -308,6 +308,39 @@ describe("freshness", () => {
   it("tolerates small clock skew without crying foul", () => {
     expect(freshness(now + 30_000, "M5", now).isImplausible).toBe(false);
   });
+
+  describe("weekend-exclusion — the fix for tight readiness limits falsely tripping every Monday", () => {
+    it("does not call Friday's D1 close stale on Monday morning, even though the raw gap exceeds D1's limit", () => {
+      // 2025-07-18 is a Friday; 2025-07-21 is the following Monday. The raw
+      // gap is ~61 hours, comfortably past D1's 26-hour limit — but almost
+      // all of that gap is a weekend the market was closed for.
+      const fridayClose = utc(2025, 7, 18, 21, 0);
+      const mondayMorning = utc(2025, 7, 21, 10, 0);
+      const result = freshness(fridayClose, "D1", mondayMorning, BROKER);
+      expect(result.ageMs).toBe(mondayMorning - fridayClose); // raw age still reported honestly
+      expect(result.isStale).toBe(false);
+    });
+
+    it("does not call an H1 close stale in the instant the market reopens, before a fresh bar could exist", () => {
+      // Right at the Sunday-evening/Monday-midnight reopen boundary (broker
+      // time) — the weekend just excluded is the whole gap, so almost no
+      // "real" elapsed trading time remains for H1's own 90-minute limit to
+      // catch. A few hours further into Monday, H1 legitimately should go
+      // stale again if no fresh candle has arrived by then — that is correct
+      // behaviour, not something this exclusion should mask.
+      const fridayClose = utc(2025, 7, 18, 21, 0);
+      const reopenInstant = utc(2025, 7, 20, 21, 0); // Sunday 21:00 UTC = Monday 00:00 Athens
+      expect(freshness(fridayClose, "H1", reopenInstant, BROKER).isStale).toBe(false);
+    });
+
+    it("still marks a genuinely stale weekday candle as stale — the exclusion does not mask a real gap", () => {
+      // Tuesday to Wednesday, no weekend involved: a 30-hour-old D1 candle
+      // really is past its 26-hour limit.
+      const tuesday = utc(2025, 7, 15, 12, 0);
+      const wednesday = utc(2025, 7, 16, 18, 0); // +30h, same week, no weekend
+      expect(freshness(tuesday, "D1", wednesday, BROKER).isStale).toBe(true);
+    });
+  });
 });
 
 describe("isMarketOpen", () => {

@@ -11,7 +11,13 @@
  */
 
 import { stochastic, type StochPoint } from "../indicators";
-import { isCandleClosed, lastClosedCandleOpen, freshness, type ClockConfig } from "../domain/clock";
+import {
+  candleCloseTime,
+  isCandleClosed,
+  lastClosedCandleOpen,
+  freshness,
+  type ClockConfig,
+} from "../domain/clock";
 import type { StochasticEvent, StochasticReading, TimeframeState } from "../domain/states";
 import { timeframeDef, type Timeframe } from "../config/timeframes";
 import type { StrategyConfig } from "../config/strategy";
@@ -90,7 +96,19 @@ export function readTimeframe(
   }
 
   const referenceCandle = closedCandles[closedCandles.length - 1]!;
-  const fresh = freshness(referenceCandle.t, timeframe, now);
+  // Measured from the candle's CLOSE, not its open — "how long since the last
+  // complete piece of information arrived," which is what staleness actually
+  // means. Measuring from open would put the worst case at nearly 2 bar
+  // widths (just before the next bar closes, the previous CLOSED bar's open
+  // is almost 2x its own duration in the past), which left several of the
+  // tight readiness limits in config/timeframes.ts permanently unsatisfiable
+  // even with perfectly fresh data.
+  const fresh = freshness(
+    candleCloseTime(referenceCandle.t, timeframe, clock),
+    timeframe,
+    now,
+    clock,
+  );
   if (fresh.isStale) {
     return {
       state: "DATA_STALE",

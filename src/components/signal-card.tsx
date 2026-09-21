@@ -7,7 +7,7 @@ import {
   requiresCountertrendWarning,
   TIMEFRAME_STATE_LABEL,
 } from "@/lib/market/domain/states";
-import { SESSION_LABEL } from "@/lib/market/domain/clock";
+import { formatAge, SESSION_LABEL } from "@/lib/market/domain/clock";
 import { fmtPrice } from "@/lib/market/instruments";
 import type { EngineSignal, TimeframeReading } from "@/lib/market/engine/types";
 import type { Quote } from "@/lib/market/types";
@@ -219,7 +219,7 @@ export function SignalCard({
       <div className="flex flex-wrap gap-2">
         <Link
           to="/chart"
-          search={{ symbol: signal.symbol }}
+          search={{ symbol: signal.symbol, signalId: undefined }}
           className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-accent"
         >
           Chart
@@ -268,11 +268,18 @@ function TimeframeChip({ reading }: { reading: TimeframeReading }) {
         ? "border-bear/50 bg-bear/10 text-bear"
         : "border-border bg-card text-muted-foreground";
   const k = reading.stochastic?.k;
+  // A stale/delayed reading must show its exact age inline, not just on
+  // hover — "STALE" alone tells you something is wrong but not how wrong.
+  const showsAge =
+    (reading.state === "DATA_STALE" || reading.state === "DATA_DELAYED") &&
+    reading.dataAgeMs !== null;
+  const ageText = showsAge ? formatAge(reading.dataAgeMs!) : null;
   const title = [
     stateLabel,
     reading.relation !== "NOT_APPLICABLE" ? reading.relation.toLowerCase() : null,
     reading.isSynthetic ? "sample data — not real" : null,
     k !== null && k !== undefined ? `K ${k.toFixed(1)}` : null,
+    ageText ? `${ageText} old` : null,
     reading.explanation,
   ]
     .filter(Boolean)
@@ -282,9 +289,12 @@ function TimeframeChip({ reading }: { reading: TimeframeReading }) {
     <span
       className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${tone} ${reading.isSynthetic ? "opacity-60" : ""}`}
       title={title}
-      aria-label={`${reading.timeframe}: ${stateLabel}${reading.relation === "CONFLICTING" ? " (conflicting)" : ""}`}
+      aria-label={`${reading.timeframe}: ${stateLabel}${reading.relation === "CONFLICTING" ? " (conflicting)" : ""}${ageText ? `, ${ageText} old` : ""}`}
     >
-      {reading.timeframe} {problem ? PROBLEM_CODE[reading.state] : (k?.toFixed(0) ?? "—")}
+      {reading.timeframe}{" "}
+      {problem
+        ? `${PROBLEM_CODE[reading.state]}${ageText ? ` ${ageText}` : ""}`
+        : (k?.toFixed(0) ?? "—")}
     </span>
   );
 }

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isQuietHour, selectNotifications, type NotifiableRow } from "./select";
+import {
+  eligibleForLabelUpdate,
+  isQuietHour,
+  selectNotifications,
+  type NotifiableRow,
+} from "./select";
 
 const NO_QUIET_HOURS = {
   mutedSymbols: new Set<string>(),
@@ -112,6 +117,46 @@ describe("selectNotifications — muting and quiet hours", () => {
     const current = [row({ label: "FULLY ALIGNED BUY READY", readiness: "READY" })];
     const quiet = { mutedSymbols: new Set<string>(), quietHoursStart: 22, quietHoursEnd: 7 };
     expect(selectNotifications(previous, current, quiet, 8)).toHaveLength(1);
+  });
+});
+
+describe("eligibleForLabelUpdate — the fix for the quiet-hours/mute permanent-loss bug", () => {
+  it("returns no symbols during quiet hours, so a suppressed transition is not forgotten", () => {
+    const quiet = { mutedSymbols: new Set<string>(), quietHoursStart: 22, quietHoursEnd: 7 };
+    const current = [row({ symbol: "XAUUSD" })];
+    expect(eligibleForLabelUpdate(current, quiet, 23)).toEqual([]);
+  });
+
+  it("excludes an individually muted symbol but not the rest", () => {
+    const muted = { ...NO_QUIET_HOURS, mutedSymbols: new Set(["XAUUSD"]) };
+    const current = [row({ symbol: "XAUUSD" }), row({ symbol: "EURUSD" })];
+    expect(eligibleForLabelUpdate(current, muted, 12)).toEqual(["EURUSD"]);
+  });
+
+  it("returns every symbol outside quiet hours with no mutes", () => {
+    const current = [row({ symbol: "XAUUSD" }), row({ symbol: "EURUSD" })];
+    expect(eligibleForLabelUpdate(current, NO_QUIET_HOURS, 12)).toEqual(["XAUUSD", "EURUSD"]);
+  });
+
+  it("demonstrates the fix end-to-end: a READY transition during quiet hours is still notified once eligible again", () => {
+    // Poll 1 (12:00, not quiet): baseline WATCH.
+    const previous = new Map<string, NotifiableRow["label"]>([["XAUUSD", "WATCH — POTENTIAL BUY"]]);
+    const quiet = { mutedSymbols: new Set<string>(), quietHoursStart: 22, quietHoursEnd: 7 };
+
+    // Poll 2 (23:00, quiet hours): symbol reaches READY. No event fires...
+    const readyRow = [row({ label: "FULLY ALIGNED BUY READY", readiness: "READY" })];
+    expect(selectNotifications(previous, readyRow, quiet, 23)).toEqual([]);
+    // ...and the caller must not advance `previous` for a suppressed symbol.
+    const eligibleAt23 = new Set(eligibleForLabelUpdate(readyRow, quiet, 23));
+    expect(eligibleAt23.has("XAUUSD")).toBe(false);
+    // previous stays WATCH, exactly as if the buggy unconditional update had not run.
+
+    // Poll 3 (08:00, quiet hours over): the signal is still READY. Because
+    // `previous` was never advanced during the suppressed poll, this still
+    // reads as a genuine transition into READY and fires.
+    const events = selectNotifications(previous, readyRow, quiet, 8);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.kind).toBe("SIGNAL_READY");
   });
 });
 
